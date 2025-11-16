@@ -186,45 +186,48 @@ def main():
     st.sidebar.header("🎯 Producto objetivo (nuevo proyecto)")
 
     colonia = st.sidebar.selectbox(
-    "Colonia / zona de referencia",
-    sorted(df["colonia"].dropna().astype(str).unique())
-)
+        "Colonia / zona de referencia",
+        sorted(df["colonia"].dropna().astype(str).unique())
+    )
 
-
+    st.sidebar.markdown("### 🧱 Características físicas")
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        m2_int = st.sidebar.number_input(
+        m2_int = st.number_input(
             "m² interiores",
             min_value=40.0, max_value=600.0,
             value=120.0, step=5.0
         )
-        m2_jard = st.sidebar.number_input(
+        m2_jard = st.number_input(
             "m² jardín",
             min_value=0.0, max_value=300.0,
             value=0.0, step=5.0
         )
-        estac = st.sidebar.number_input(
-            "Cajones de estacionamiento",
-            min_value=0, max_value=6,
-            value=2, step=1
-        )
     with col2:
-        m2_tot = st.sidebar.number_input(
-            "m² totales (incluye terrazas/jardín)",
-            min_value=40.0, max_value=800.0,
-            value=130.0, step=5.0
-        )
-        m2_terr = st.sidebar.number_input(
+        m2_terr = st.number_input(
             "m² terraza",
             min_value=0.0, max_value=200.0,
             value=8.0, step=2.0
         )
-        descuento_pct = st.sidebar.number_input(
-            "Descuento objetivo (%)",
-            min_value=0.0, max_value=20.0,
-            value=5.0, step=0.5
+        estac = st.number_input(
+            "Cajones de estacionamiento",
+            min_value=0, max_value=6,
+            value=2, step=1
         )
+
+    # m² totales calculados automáticamente
+    m2_tot = m2_int + m2_jard + m2_terr
+
+    st.sidebar.markdown(
+        f"**m² totales (calculado):** `{m2_tot:,.1f} m²`"
+    )
+
+    descuento_pct = st.sidebar.number_input(
+        "Descuento objetivo (%)",
+        min_value=0.0, max_value=20.0,
+        value=5.0, step=0.5
+    )
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("📈 Proyección de precios (Opción C)")
@@ -348,7 +351,7 @@ def main():
             - El modelo está entrenado con **{len(df):,} operaciones reales**.  
             - Crecimiento histórico estimado para **{colonia}**: **{hist_growth:.1f}% anual**.  
             - Inflación esperada: **{inflacion:.1f}% anual**.  
-            - Tasa efectiva usada (combinación Opción C): **{g_efectivo:.1f}% anual**.
+            - Tasa efectiva usada (combinación histórico + inflación): **{g_efectivo:.1f}% anual**.
             """
         )
 
@@ -362,7 +365,7 @@ def main():
             st.markdown("#### Configuración física del producto")
             st.write(f"- Colonia / zona de referencia: **{colonia}**")
             st.write(f"- m² interiores: **{m2_int:.1f} m²**")
-            st.write(f"- m² totales: **{m2_tot:.1f} m²**")
+            st.write(f"- m² totales (calculado): **{m2_tot:.1f} m²**")
             st.write(f"- m² terraza: **{m2_terr:.1f} m²**")
             st.write(f"- m² jardín: **{m2_jard:.1f} m²**")
             st.write(f"- Cajones de estacionamiento: **{estac}**")
@@ -418,3 +421,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
