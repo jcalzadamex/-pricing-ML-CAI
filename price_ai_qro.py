@@ -186,9 +186,11 @@ def main():
     st.sidebar.header("🎯 Producto objetivo (nuevo proyecto)")
 
     colonia = st.sidebar.selectbox(
-        "Colonia / zona de referencia",
-        sorted(df["colonia"].unique())
-    )
+    "Colonia / zona de referencia",
+    sorted(df["colonia"].dropna().astype(str).unique())
+)
+
+
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
