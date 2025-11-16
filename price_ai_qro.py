@@ -12,7 +12,7 @@ def load_and_prepare_data():
     """
     Carga:
       - sf_ventas_qro.csv (ventas históricas)
-      - inpc_mexico.csv (INPC oficial por año/mes)
+      - inpc_mexico.csv (INPC oficial por año/mes, columnas: anio, mes, inpc)
 
     Ajusta todos los precios a pesos constantes usando INPC,
     y calcula:
@@ -53,15 +53,22 @@ def load_and_prepare_data():
     df = df[mask_valid].copy()
 
     # --- 2) Cargar INPC y empatar por año/mes ---
- inpc_df = pd.read_csv("inpc_mexico.csv")
+    inpc_df = pd.read_csv("inpc_mexico.csv", encoding="utf-8")
 
-    # Asegurar tipos correctos
+    # Normalizar nombres de columnas por si vienen con mayúsculas/espacios
+    inpc_df.columns = [c.strip().lower() for c in inpc_df.columns]
+
+    # Esperamos columnas: anio, mes, inpc
+    required_cols = {"anio", "mes", "inpc"}
+    if not required_cols.issubset(set(inpc_df.columns)):
+        raise ValueError(f"El CSV de INPC debe contener las columnas: {required_cols}")
+
     inpc_df["anio"] = inpc_df["anio"].astype(int)
     inpc_df["mes"] = inpc_df["mes"].astype(int)
 
     # Merge ventas + INPC según año y mes de firma
     df = df.merge(
-        inpc_df,
+        inpc_df[["anio", "mes", "inpc"]],
         left_on=["anio_firma", "mes_firma"],
         right_on=["anio", "mes"],
         how="left"
