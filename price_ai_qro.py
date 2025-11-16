@@ -4,31 +4,35 @@ from sklearn.ensemble import RandomForestRegressor
 import numpy as np
 
 # =========================
-# 1. CARGA + PREPARACIÓN DE DATOS
+# 1. CARGA + PREPARACIÓN DE DATOS (CON INPC)
 # =========================
 
 @st.cache_data
 def load_and_prepare_data():
     """
-    Carga el CSV ya limpio (con las columnas:
-    desarrollo, colonia, m2_interiores, m2_totales, m2_jardin, m2_terraza,
-    estacionamientos, eje, precio_listado, precio_cerrado, descuento_pct,
-    fecha_creacion, fecha_firma, anio_firma, mes_firma, dias_creacion_a_firma, precio_m2)
+    Carga:
+      - sf_ventas_qro.csv (ventas históricas)
+      - inpc_mexico.csv (INPC oficial por año/mes)
+
+    Ajusta todos los precios a pesos constantes usando INPC,
     y calcula:
-      - Crecimiento histórico de precios por colonia (CAGR).
-      - Nivel relativo de precio/m² por colonia vs promedio global.
+      - precio_cerrado_real (ajustado a pesos del último periodo)
+      - precio_m2 (sobre el precio ajustado)
+      - crecimiento histórico por colonia (CAGR)
+      - nivel relativo de precio/m² por colonia vs promedio global
     """
-    raw_path = "sf_ventas_qro.csv"  # nombre del archivo en el repo
+    # --- 1) Cargar ventas ---
+    raw_path = "sf_ventas_qro.csv"
     df = pd.read_csv(raw_path)
 
-    # Asegurar tipos de fecha (por si vienen como texto)
+    # Fechas
     for col in ["fecha_creacion", "fecha_firma"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
         else:
             df[col] = pd.NaT
 
-    # Si anio_firma / mes_firma no existen, los calculamos desde fecha_firma
+    # Año / mes de firma
     if "anio_firma" not in df.columns:
         df["anio_firma"] = df["fecha_firma"].dt.year
     if "mes_firma" not in df.columns:
@@ -39,10 +43,7 @@ def load_and_prepare_data():
             df["fecha_firma"] - df["fecha_creacion"]
         ).dt.days
 
-    # Asegurar precio_m2 correcto
-    df["precio_m2"] = df["precio_cerrado"] / df["m2_interiores"]
-
-    # Filtrar registros válidos
+    # Filtrar registros válidos básicos
     mask_valid = (
         df["precio_cerrado"].notna()
         & (df["precio_cerrado"] > 0)
@@ -51,11 +52,39 @@ def load_and_prepare_data():
     )
     df = df[mask_valid].copy()
 
+    # --- 2) Cargar INPC y empatar por año/mes ---
+    inpc_df = pd.read_csv("inpc_mexico.csv")
+
+    # Asegurar tipos correctos
+    inpc_df["anio"] = inpc_df["anio"].astype(int)
+    inpc_df["mes"] = inpc_df["mes"].astype(int)
+
+    # Merge ventas + INPC según año y mes de firma
+    df = df.merge(
+        inpc_df,
+        left_on=["anio_firma", "mes_firma"],
+        right_on=["anio", "mes"],
+        how="left"
+    )
+
+    # Eliminar registros sin INPC (por seguridad)
+    df = df[df["inpc"].notna()].copy()
+
+    # --- 3) Ajustar precios a pesos constantes usando INPC ---
+    # INPC de referencia = el más reciente de la serie (máximo)
+    inpc_ref = inpc_df["inpc"].max()
+
+    # Precio real ajustado a pesos del periodo de referencia
+    df["precio_cerrado_real"] = df["precio_cerrado"] * (inpc_ref / df["inpc"])
+
+    # Recalcular precio_m2 con el precio ajustado
+    df["precio_m2"] = df["precio_cerrado_real"] / df["m2_interiores"]
+
     # Eliminar outliers extremos en precio/m2 (1% y 99%)
     q1, q99 = df["precio_m2"].quantile([0.01, 0.99])
     df = df[(df["precio_m2"] >= q1) & (df["precio_m2"] <= q99)].copy()
 
-    # ---- Niveles de precio/m² ----
+    # --- 4) Niveles de precio/m² por colonia ---
     med_price_m2_global = df["precio_m2"].median()
     med_price_m2_colonia = (
         df.groupby("colonia")["precio_m2"]
@@ -63,7 +92,7 @@ def load_and_prepare_data():
         .to_dict()
     )
 
-    # ---- Crecimiento histórico por colonia (CAGR en % anual) ----
+    # --- 5) Crecimiento histórico por colonia (CAGR en % anual) ---
     growth_colonia = {}
     trend = (
         df.groupby(["colonia", "anio_firma"])["precio_m2"]
@@ -96,12 +125,15 @@ def load_and_prepare_data():
         med_price_m2_global,
     )
 
+# =========================
+# 2. MODELO
+# =========================
 
 @st.cache_resource
 def train_model(df: pd.DataFrame):
     """
     Entrena un RandomForestRegressor usando como variable categórica la colonia.
-    El modelo predice precio_cerrado (precio real de venta).
+    El modelo predice precio_cerrado_real (precio ajustado por INPC).
     """
     numeric_features = [
         "m2_interiores",
@@ -119,7 +151,7 @@ def train_model(df: pd.DataFrame):
     X_num = df[numeric_features].fillna(0)
     X_cat = pd.get_dummies(df[cat_features].astype(str), prefix=cat_features)
     X = pd.concat([X_num, X_cat], axis=1)
-    y = df["precio_cerrado"]
+    y = df["precio_cerrado_real"]
 
     model = RandomForestRegressor(
         n_estimators=400,
@@ -181,7 +213,7 @@ def build_input_row(
 
 
 # =========================
-# 2. APP STREAMLIT – PRECIOS ACTUALES Y FUTUROS
+# 3. APP STREAMLIT – PRECIOS ACTUALES Y FUTUROS
 # =========================
 
 def main():
@@ -192,8 +224,8 @@ def main():
 
     st.title("🏙️ AI Pricing Engine – Querétaro")
     st.caption(
-        "Motor de pricing entrenado con ventas reales desde 2013 "
-        "para estimar precios actuales y futuros por zona/producto."
+        "Motor de pricing entrenado con ventas reales desde 2013, "
+        "ajustadas por INPC, para estimar precios actuales y futuros por zona/producto."
     )
 
     (
@@ -255,20 +287,20 @@ def main():
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📈 Proyección de precios (histórico + inflación)")
+    st.sidebar.subheader("📈 Proyección de precios (histórico + inflación futura)")
 
-    # Crecimiento histórico por colonia (si existe)
+    # Crecimiento histórico por colonia (ya en precios reales)
     hist_growth = growth_colonia.get(colonia, default_growth)
 
     inflacion = st.sidebar.slider(
-        "Inflación esperada anual (%)",
+        "Inflación esperada anual futura (%)",
         0.0, 12.0, 4.0, step=0.5
     )
 
     peso_hist = st.sidebar.slider(
         "Peso del histórico de la colonia (%)",
         0, 100, 70, step=5,
-        help="Ejemplo: 70% histórico de la colonia, 30% inflación general."
+        help="Ejemplo: 70% histórico de la colonia, 30% inflación esperada futura."
     )
 
     horizonte_meses = st.sidebar.slider(
@@ -305,19 +337,19 @@ def main():
         feature_columns=feature_columns,
     )
 
-    # Predicción base del modelo (sin ajustar por nivel de colonia)
-    precio_base = float(model.predict(input_row)[0])
+    # Predicción base del modelo (precio real actual)
+    precio_base_real = float(model.predict(input_row)[0])
 
     # Ajuste por nivel de precio/m² de la colonia vs el promedio global
     med_colonia = med_price_m2_colonia.get(colonia, med_price_m2_global)
     factor_zona = med_colonia / med_price_m2_global if med_price_m2_global > 0 else 1.0
 
-    precio_hoy = precio_base * factor_zona
+    precio_hoy = precio_base_real * factor_zona
     precio_hoy_min = precio_hoy * 0.95
     precio_hoy_max = precio_hoy * 1.05
     precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
 
-    # Opción C: combinación histórico + inflación
+    # Mezcla: histórico colonia (ya real) + inflación futura
     peso_hist_f = peso_hist / 100.0
     g_efectivo = hist_growth * peso_hist_f + inflacion * (1 - peso_hist_f)
 
@@ -380,11 +412,12 @@ def main():
 
         st.markdown(
             f"""
-            - El modelo está entrenado con **{len(df):,} operaciones reales**.  
-            - Nivel relativo de precio/m² de **{colonia}** vs promedio: **{factor_zona:,.2f}x**.  
-            - Crecimiento histórico estimado para **{colonia}**: **{hist_growth:.1f}% anual**.  
-            - Inflación esperada: **{inflacion:.1f}% anual**.  
-            - Tasa efectiva usada (histórico + inflación): **{g_efectivo:.1f}% anual**.
+            - El modelo está entrenado con **{len(df):,} operaciones reales**, 
+              todas ajustadas a precios constantes usando INPC oficial.  
+            - Multiplicador de zona para **{colonia}** (precio/m² colonia / global): **{factor_zona:,.2f}x**.  
+            - Crecimiento histórico estimado (real) para **{colonia}**: **{hist_growth:.1f}% anual**.  
+            - Inflación futura esperada: **{inflacion:.1f}% anual**.  
+            - Tasa efectiva usada (histórico + inflación futura): **{g_efectivo:.1f}% anual**.
             """
         )
 
@@ -407,8 +440,8 @@ def main():
             st.markdown("#### Supuestos comerciales y de mercado")
             st.write(f"- Descuento objetivo vs lista: **{descuento_pct:.1f}%**")
             st.write(f"- Horizonte de proyección: **{horizonte_meses} meses**")
-            st.write(f"- Crecimiento histórico colonia: **{hist_growth:.1f}% anual**")
-            st.write(f"- Inflación esperada: **{inflacion:.1f}% anual**")
+            st.write(f"- Crecimiento histórico colonia (real): **{hist_growth:.1f}% anual**")
+            st.write(f"- Inflación futura esperada: **{inflacion:.1f}% anual**")
             st.write(f"- Peso histórico colonia: **{peso_hist}%**")
             st.write(f"- Tasa efectiva usada: **{g_efectivo:.1f}% anual**")
             st.write(f"- Multiplicador de zona (precio/m² colonia / global): **{factor_zona:,.2f}x**")
@@ -425,23 +458,23 @@ def main():
 
     # ---- TAB 3: HISTÓRICO ----
     with tab_hist:
-        st.subheader("📈 Historial de precios por m² en la colonia")
+        st.subheader("📈 Historial de precios por m² en la colonia (precios reales)")
 
         df_col = df[df["colonia"] == colonia].copy()
         if not df_col.empty:
             st.write(
                 f"Historial de ventas para **{colonia}** "
-                f"({len(df_col)} operaciones depuradas)."
+                f"({len(df_col)} operaciones depuradas, ajustadas por INPC)."
             )
 
             st.dataframe(
                 df_col[
                     ["anio_firma", "mes_firma",
-                     "m2_interiores", "precio_cerrado", "precio_m2"]
+                     "m2_interiores", "precio_cerrado_real", "precio_m2"]
                 ].sort_values(["anio_firma", "mes_firma"])
             )
 
-            st.markdown("#### Evolución histórica de precio/m² (mediana anual)")
+            st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
             pivot = (
                 df_col.groupby("anio_firma")["precio_m2"]
                 .median()
