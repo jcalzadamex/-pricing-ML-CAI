@@ -53,7 +53,10 @@ def load_and_prepare_data():
     df = df[mask_valid].copy()
 
     # --- 2) Cargar INPC y empatar por año/mes ---
-    inpc_df = pd.read_csv("inpc_mexico.csv", encoding="latin-1", errors="ignore")
+   try:
+    inpc_df = pd.read_csv("inpc_mexico.csv", encoding="utf-8")
+except UnicodeDecodeError:
+    inpc_df = pd.read_csv("inpc_mexico.csv", encoding="latin-1")
 
     # Asegurar tipos correctos
     inpc_df["anio"] = inpc_df["anio"].astype(int)
