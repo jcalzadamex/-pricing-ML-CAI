@@ -14,7 +14,9 @@ def load_and_prepare_data():
     desarrollo, colonia, m2_interiores, m2_totales, m2_jardin, m2_terraza,
     estacionamientos, eje, precio_listado, precio_cerrado, descuento_pct,
     fecha_creacion, fecha_firma, anio_firma, mes_firma, dias_creacion_a_firma, precio_m2)
-    y calcula el crecimiento histórico de precios por colonia.
+    y calcula:
+      - Crecimiento histórico de precios por colonia (CAGR).
+      - Nivel relativo de precio/m² por colonia vs promedio global.
     """
     raw_path = "sf_ventas_qro.csv"  # nombre del archivo en el repo
     df = pd.read_csv(raw_path)
@@ -53,6 +55,14 @@ def load_and_prepare_data():
     q1, q99 = df["precio_m2"].quantile([0.01, 0.99])
     df = df[(df["precio_m2"] >= q1) & (df["precio_m2"] <= q99)].copy()
 
+    # ---- Niveles de precio/m² ----
+    med_price_m2_global = df["precio_m2"].median()
+    med_price_m2_colonia = (
+        df.groupby("colonia")["precio_m2"]
+        .median()
+        .to_dict()
+    )
+
     # ---- Crecimiento histórico por colonia (CAGR en % anual) ----
     growth_colonia = {}
     trend = (
@@ -77,7 +87,14 @@ def load_and_prepare_data():
 
     latest_year = int(df["anio_firma"].max())
 
-    return df, growth_colonia, default_growth, latest_year
+    return (
+        df,
+        growth_colonia,
+        default_growth,
+        latest_year,
+        med_price_m2_colonia,
+        med_price_m2_global,
+    )
 
 
 @st.cache_resource
@@ -179,7 +196,15 @@ def main():
         "para estimar precios actuales y futuros por zona/producto."
     )
 
-    df, growth_colonia, default_growth, latest_year = load_and_prepare_data()
+    (
+        df,
+        growth_colonia,
+        default_growth,
+        latest_year,
+        med_price_m2_colonia,
+        med_price_m2_global,
+    ) = load_and_prepare_data()
+
     model, feature_columns = train_model(df)
 
     # ================= SIDEBAR =================
@@ -230,7 +255,7 @@ def main():
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📈 Proyección de precios (Opción C)")
+    st.sidebar.subheader("📈 Proyección de precios (histórico + inflación)")
 
     # Crecimiento histórico por colonia (si existe)
     hist_growth = growth_colonia.get(colonia, default_growth)
@@ -280,7 +305,14 @@ def main():
         feature_columns=feature_columns,
     )
 
-    precio_hoy = float(model.predict(input_row)[0])
+    # Predicción base del modelo (sin ajustar por nivel de colonia)
+    precio_base = float(model.predict(input_row)[0])
+
+    # Ajuste por nivel de precio/m² de la colonia vs el promedio global
+    med_colonia = med_price_m2_colonia.get(colonia, med_price_m2_global)
+    factor_zona = med_colonia / med_price_m2_global if med_price_m2_global > 0 else 1.0
+
+    precio_hoy = precio_base * factor_zona
     precio_hoy_min = precio_hoy * 0.95
     precio_hoy_max = precio_hoy * 1.05
     precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
@@ -289,10 +321,10 @@ def main():
     peso_hist_f = peso_hist / 100.0
     g_efectivo = hist_growth * peso_hist_f + inflacion * (1 - peso_hist_f)
 
-    factor = (1 + g_efectivo / 100.0) ** (horizonte_meses / 12.0)
-    precio_futuro = precio_hoy * factor
-    precio_futuro_min = precio_hoy_min * factor
-    precio_futuro_max = precio_hoy_max * factor
+    factor_tiempo = (1 + g_efectivo / 100.0) ** (horizonte_meses / 12.0)
+    precio_futuro = precio_hoy * factor_tiempo
+    precio_futuro_min = precio_hoy_min * factor_tiempo
+    precio_futuro_max = precio_hoy_max * factor_tiempo
     precio_m2_fut = precio_futuro / m2_int if m2_int > 0 else 0
 
     delta_abs_hoy = precio_objetivo - precio_hoy
@@ -349,9 +381,10 @@ def main():
         st.markdown(
             f"""
             - El modelo está entrenado con **{len(df):,} operaciones reales**.  
+            - Nivel relativo de precio/m² de **{colonia}** vs promedio: **{factor_zona:,.2f}x**.  
             - Crecimiento histórico estimado para **{colonia}**: **{hist_growth:.1f}% anual**.  
             - Inflación esperada: **{inflacion:.1f}% anual**.  
-            - Tasa efectiva usada (combinación histórico + inflación): **{g_efectivo:.1f}% anual**.
+            - Tasa efectiva usada (histórico + inflación): **{g_efectivo:.1f}% anual**.
             """
         )
 
@@ -378,6 +411,7 @@ def main():
             st.write(f"- Inflación esperada: **{inflacion:.1f}% anual**")
             st.write(f"- Peso histórico colonia: **{peso_hist}%**")
             st.write(f"- Tasa efectiva usada: **{g_efectivo:.1f}% anual**")
+            st.write(f"- Multiplicador de zona (precio/m² colonia / global): **{factor_zona:,.2f}x**")
             st.write(f"- Precio recomendado HOY: **${precio_hoy:,.0f} MXN**")
             st.write(
                 f"- Precio recomendado en {horizonte_meses} meses: "
@@ -421,4 +455,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
