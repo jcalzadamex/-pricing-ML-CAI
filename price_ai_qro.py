@@ -11,11 +11,130 @@ import numpy as np
 @st.cache_data
 def load_and_prepare_data():
     """
-    Carga el CSV crudo exportado desde Salesforce
+    Carga el CSV crudo exportado desde Salesforce,
+    busca las columnas clave aunque tengan nombres ligeramente distintos
     y genera un dataset limpio + tendencias de precio/m2 por desarrollo.
     """
-    raw_path = "sf_ventas_qro.csv"  # <--- Asegúrate que se llame así en el repo
+    raw_path = "sf_ventas_qro.csv"  # nombre del archivo en el repo
     df_raw = pd.read_csv(raw_path)
+
+    # --- Helper para encontrar columnas aunque el nombre no sea exacto ---
+    def find_col(keywords, required=True):
+        """
+        Busca en df_raw.columns alguna columna que contenga
+        cualquiera de las palabras clave (ignorando mayúsculas y espacios).
+        """
+        cols_norm = {c: c.strip().lower() for c in df_raw.columns}
+        for kw in keywords:
+            kw_norm = kw.lower()
+            for original, norm in cols_norm.items():
+                if kw_norm in norm:
+                    return original
+        if required:
+            raise KeyError(
+                f"No se encontró en el CSV ninguna columna que contenga: {keywords}"
+            )
+        return None
+
+    # Detectar nombres reales de columnas en tu CSV
+    col_desarrollo      = find_col(["desarrollo"])
+    col_colonia         = find_col(["colonia"])
+    col_m2_const        = find_col(["m2 construcción privativa", "m2 construccion privativa", "m2 construccion"])
+    col_m2_total        = find_col(["área privativa total", "area privativa total"])
+    col_m2_jardin       = find_col(["m2 jardín", "m2 jardin"], required=False)
+    col_mts2_terraza_1  = find_col(["mts 2 terraza", "m2 terraza"], required=False)
+    col_mts2_terraza_2  = find_col(["mts2 terraza"], required=False)
+    col_estac           = find_col(["cajones de estacionamiento", "estacionamiento"])
+    col_eje             = find_col(["eje"], required=False)
+    col_valor_prop      = find_col(["valor propiedad", "valor de propiedad"])
+    col_valor_final     = find_col(["valor final"])
+    col_descuento       = find_col(["descuento total"], required=False)
+    col_created         = find_col(["created date", "fecha creación"], required=False)
+    col_firma           = find_col(["fecha firma de contrato", "fecha firma"], required=False)
+
+    # Asegurar columnas de terraza aunque falte alguna
+    if col_mts2_terraza_1 is None:
+        df_raw["__terraza1_tmp"] = 0.0
+        col_mts2_terraza_1 = "__terraza1_tmp"
+    if col_mts2_terraza_2 is None:
+        df_raw["__terraza2_tmp"] = 0.0
+        col_mts2_terraza_2 = "__terraza2_tmp"
+
+    df_raw["terraza_m2"] = (
+        df_raw[[col_mts2_terraza_1, col_mts2_terraza_2]]
+        .fillna(0)
+        .max(axis=1)
+    )
+
+    # Construimos el DataFrame estándar que usa el modelo
+    df = pd.DataFrame({
+        "desarrollo": df_raw[col_desarrollo].astype(str).str.strip(),
+        "colonia": df_raw[col_colonia].astype(str).str.strip(),
+        "m2_interiores": df_raw[col_m2_const],
+        "m2_totales": df_raw[col_m2_total],
+        "m2_jardin": df_raw[col_m2_jardin].fillna(0) if col_m2_jardin else 0.0,
+        "m2_terraza": df_raw["terraza_m2"].fillna(0),
+        "estacionamientos": df_raw[col_estac].fillna(0),
+        "eje": df_raw[col_eje].astype(str).str.strip() if col_eje else "",
+        "precio_listado": df_raw[col_valor_prop],
+        "precio_cerrado": df_raw[col_valor_final],
+        "descuento_pct": df_raw[col_descuento].fillna(0) if col_descuento else 0.0,
+        "fecha_creacion": df_raw[col_created] if col_created else pd.NaT,
+        "fecha_firma": df_raw[col_firma] if col_firma else pd.NaT,
+    })
+
+    # Fechas
+    for col in ["fecha_creacion", "fecha_firma"]:
+        df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+
+    df["anio_firma"] = df["fecha_firma"].dt.year
+    df["mes_firma"] = df["fecha_firma"].dt.month
+    df["dias_creacion_a_firma"] = (
+        df["fecha_firma"] - df["fecha_creacion"]
+    ).dt.days
+
+    # Filtrar registros válidos
+    mask_valid = (
+        df["precio_cerrado"].notna()
+        & (df["precio_cerrado"] > 0)
+        & df["m2_interiores"].notna()
+        & (df["m2_interiores"] > 0)
+    )
+    df = df[mask_valid].copy()
+
+    # Precio por m2 y outliers
+    df["precio_m2"] = df["precio_cerrado"] / df["m2_interiores"]
+    q1, q99 = df["precio_m2"].quantile([0.01, 0.99])
+    df = df[(df["precio_m2"] >= q1) & (df["precio_m2"] <= q99)].copy()
+
+    # ---- Tendencias por desarrollo (CAGR) ----
+    growth_dict = {}
+    price_trend = (
+        df.groupby(["desarrollo", "anio_firma"])["precio_m2"]
+        .median()
+        .reset_index()
+    )
+
+    for dev, grp in price_trend.groupby("desarrollo"):
+        grp = grp.dropna(subset=["anio_firma", "precio_m2"]).sort_values("anio_firma")
+        if grp["anio_firma"].nunique() >= 2:
+            first = grp["precio_m2"].iloc[0]
+            last = grp["precio_m2"].iloc[-1]
+            years = grp["anio_firma"].iloc[-1] - grp["anio_firma"].iloc[0]
+            if first > 0 and years > 0:
+                cagr = (last / first) ** (1 / years) - 1
+                growth_dict[dev] = cagr * 100
+
+    # Crecimiento promedio como fallback
+    if growth_dict:
+        default_growth = float(pd.Series(growth_dict).median())
+    else:
+        default_growth = 5.0
+
+    latest_year = int(df["anio_firma"].max())
+
+    return df, growth_dict, default_growth, latest_year
+
 
     # Asegurar columnas de terraza
     for c in ["Mts 2 Terraza", "Mts2 Terraza"]:
