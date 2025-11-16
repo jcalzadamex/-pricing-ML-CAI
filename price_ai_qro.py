@@ -1,97 +1,44 @@
 import streamlit as st
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
-from PIL import Image
 import numpy as np
 
 # =========================
-# 1. CARGA + LIMPIEZA + TENDENCIAS
+# 1. CARGA + PREPARACIÓN DE DATOS
 # =========================
 
 @st.cache_data
 def load_and_prepare_data():
     """
-    Carga el CSV crudo exportado desde Salesforce,
-    busca las columnas clave aunque tengan nombres ligeramente distintos
-    y genera un dataset limpio + tendencias de precio/m2 por desarrollo.
+    Carga el CSV ya limpio (con las columnas:
+    desarrollo, colonia, m2_interiores, m2_totales, m2_jardin, m2_terraza,
+    estacionamientos, eje, precio_listado, precio_cerrado, descuento_pct,
+    fecha_creacion, fecha_firma, anio_firma, mes_firma, dias_creacion_a_firma, precio_m2)
+    y calcula el crecimiento histórico de precios por colonia.
     """
     raw_path = "sf_ventas_qro.csv"  # nombre del archivo en el repo
-    df_raw = pd.read_csv(raw_path)
+    df = pd.read_csv(raw_path)
 
-    # --- Helper para encontrar columnas aunque el nombre no sea exacto ---
-    def find_col(keywords, required=True):
-        """
-        Busca en df_raw.columns alguna columna que contenga
-        cualquiera de las palabras clave (ignorando mayúsculas y espacios).
-        """
-        cols_norm = {c: c.strip().lower() for c in df_raw.columns}
-        for kw in keywords:
-            kw_norm = kw.lower()
-            for original, norm in cols_norm.items():
-                if kw_norm in norm:
-                    return original
-        if required:
-            raise KeyError(
-                f"No se encontró en el CSV ninguna columna que contenga: {keywords}"
-            )
-        return None
-
-    # Detectar nombres reales de columnas en tu CSV
-    col_desarrollo      = find_col(["desarrollo"])
-    col_colonia         = find_col(["colonia"])
-    col_m2_const        = find_col(["m2 construcción privativa", "m2 construccion privativa", "m2 construccion"])
-    col_m2_total        = find_col(["área privativa total", "area privativa total"])
-    col_m2_jardin       = find_col(["m2 jardín", "m2 jardin"], required=False)
-    col_mts2_terraza_1  = find_col(["mts 2 terraza", "m2 terraza"], required=False)
-    col_mts2_terraza_2  = find_col(["mts2 terraza"], required=False)
-    col_estac           = find_col(["cajones de estacionamiento", "estacionamiento"])
-    col_eje             = find_col(["eje"], required=False)
-    col_valor_prop      = find_col(["valor propiedad", "valor de propiedad"])
-    col_valor_final     = find_col(["valor final"])
-    col_descuento       = find_col(["descuento total"], required=False)
-    col_created         = find_col(["created date", "fecha creación"], required=False)
-    col_firma           = find_col(["fecha firma de contrato", "fecha firma"], required=False)
-
-    # Asegurar columnas de terraza aunque falte alguna
-    if col_mts2_terraza_1 is None:
-        df_raw["__terraza1_tmp"] = 0.0
-        col_mts2_terraza_1 = "__terraza1_tmp"
-    if col_mts2_terraza_2 is None:
-        df_raw["__terraza2_tmp"] = 0.0
-        col_mts2_terraza_2 = "__terraza2_tmp"
-
-    df_raw["terraza_m2"] = (
-        df_raw[[col_mts2_terraza_1, col_mts2_terraza_2]]
-        .fillna(0)
-        .max(axis=1)
-    )
-
-    # Construimos el DataFrame estándar que usa el modelo
-    df = pd.DataFrame({
-        "desarrollo": df_raw[col_desarrollo].astype(str).str.strip(),
-        "colonia": df_raw[col_colonia].astype(str).str.strip(),
-        "m2_interiores": df_raw[col_m2_const],
-        "m2_totales": df_raw[col_m2_total],
-        "m2_jardin": df_raw[col_m2_jardin].fillna(0) if col_m2_jardin else 0.0,
-        "m2_terraza": df_raw["terraza_m2"].fillna(0),
-        "estacionamientos": df_raw[col_estac].fillna(0),
-        "eje": df_raw[col_eje].astype(str).str.strip() if col_eje else "",
-        "precio_listado": df_raw[col_valor_prop],
-        "precio_cerrado": df_raw[col_valor_final],
-        "descuento_pct": df_raw[col_descuento].fillna(0) if col_descuento else 0.0,
-        "fecha_creacion": df_raw[col_created] if col_created else pd.NaT,
-        "fecha_firma": df_raw[col_firma] if col_firma else pd.NaT,
-    })
-
-    # Fechas
+    # Asegurar tipos de fecha (por si vienen como texto)
     for col in ["fecha_creacion", "fecha_firma"]:
-        df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+        else:
+            df[col] = pd.NaT
 
-    df["anio_firma"] = df["fecha_firma"].dt.year
-    df["mes_firma"] = df["fecha_firma"].dt.month
-    df["dias_creacion_a_firma"] = (
-        df["fecha_firma"] - df["fecha_creacion"]
-    ).dt.days
+    # Si anio_firma / mes_firma no existen, los calculamos desde fecha_firma
+    if "anio_firma" not in df.columns:
+        df["anio_firma"] = df["fecha_firma"].dt.year
+    if "mes_firma" not in df.columns:
+        df["mes_firma"] = df["fecha_firma"].dt.month
+
+    if "dias_creacion_a_firma" not in df.columns:
+        df["dias_creacion_a_firma"] = (
+            df["fecha_firma"] - df["fecha_creacion"]
+        ).dt.days
+
+    # Asegurar precio_m2 correcto
+    df["precio_m2"] = df["precio_cerrado"] / df["m2_interiores"]
 
     # Filtrar registros válidos
     mask_valid = (
@@ -102,20 +49,19 @@ def load_and_prepare_data():
     )
     df = df[mask_valid].copy()
 
-    # Precio por m2 y outliers
-    df["precio_m2"] = df["precio_cerrado"] / df["m2_interiores"]
+    # Eliminar outliers extremos en precio/m2 (1% y 99%)
     q1, q99 = df["precio_m2"].quantile([0.01, 0.99])
     df = df[(df["precio_m2"] >= q1) & (df["precio_m2"] <= q99)].copy()
 
-    # ---- Tendencias por desarrollo (CAGR) ----
-    growth_dict = {}
-    price_trend = (
-        df.groupby(["desarrollo", "anio_firma"])["precio_m2"]
+    # ---- Crecimiento histórico por colonia (CAGR en % anual) ----
+    growth_colonia = {}
+    trend = (
+        df.groupby(["colonia", "anio_firma"])["precio_m2"]
         .median()
         .reset_index()
     )
 
-    for dev, grp in price_trend.groupby("desarrollo"):
+    for col_name, grp in trend.groupby("colonia"):
         grp = grp.dropna(subset=["anio_firma", "precio_m2"]).sort_values("anio_firma")
         if grp["anio_firma"].nunique() >= 2:
             first = grp["precio_m2"].iloc[0]
@@ -123,95 +69,22 @@ def load_and_prepare_data():
             years = grp["anio_firma"].iloc[-1] - grp["anio_firma"].iloc[0]
             if first > 0 and years > 0:
                 cagr = (last / first) ** (1 / years) - 1
-                growth_dict[dev] = cagr * 100
+                growth_colonia[col_name] = cagr * 100.0  # en %
 
-    # Crecimiento promedio como fallback
-    if growth_dict:
-        default_growth = float(pd.Series(growth_dict).median())
-    else:
-        default_growth = 5.0
+    default_growth = float(
+        np.median(list(growth_colonia.values()))
+    ) if growth_colonia else 5.0
 
     latest_year = int(df["anio_firma"].max())
 
-    return df, growth_dict, default_growth, latest_year
-
-
-    # Asegurar columnas de terraza
-    for c in ["Mts 2 Terraza", "Mts2 Terraza"]:
-        if c not in df_raw.columns:
-            df_raw[c] = 0.0
-
-    df_raw["terraza_m2"] = df_raw[["Mts 2 Terraza", "Mts2 Terraza"]].fillna(0).max(axis=1)
-
-    df = pd.DataFrame({
-        "desarrollo": df_raw["Desarrollo"].astype(str).str.strip(),
-        "colonia": df_raw["Colonia"].astype(str).str.strip(),
-        "m2_interiores": df_raw["M2 Construcción Privativa"],
-        "m2_totales": df_raw["Área Privativa Total (m2)"],
-        "m2_jardin": df_raw["M2 Jardín"].fillna(0),
-        "m2_terraza": df_raw["terraza_m2"].fillna(0),
-        "estacionamientos": df_raw["Cajones de Estacionamiento"].fillna(0),
-        "eje": df_raw["Eje"].astype(str).str.strip(),
-        "precio_listado": df_raw["Valor Propiedad"],
-        "precio_cerrado": df_raw["Valor Final"],
-        "descuento_pct": df_raw["Descuento Total"].fillna(0),
-        "fecha_creacion": df_raw["Created Date"],
-        "fecha_firma": df_raw["Fecha Firma de Contrato"],
-    })
-
-    # Fechas
-    for col in ["fecha_creacion", "fecha_firma"]:
-        df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
-
-    df["anio_firma"] = df["fecha_firma"].dt.year
-    df["mes_firma"] = df["fecha_firma"].dt.month
-    df["dias_creacion_a_firma"] = (df["fecha_firma"] - df["fecha_creacion"]).dt.days
-
-    # Filtrar registros válidos
-    mask_valid = (
-        df["precio_cerrado"].notna()
-        & (df["precio_cerrado"] > 0)
-        & df["m2_interiores"].notna()
-        & (df["m2_interiores"] > 0)
-    )
-    df = df[mask_valid].copy()
-
-    # Precio por m2 y outliers
-    df["precio_m2"] = df["precio_cerrado"] / df["m2_interiores"]
-    q1, q99 = df["precio_m2"].quantile([0.01, 0.99])
-    df = df[(df["precio_m2"] >= q1) & (df["precio_m2"] <= q99)].copy()
-
-    # ---- Tendencia por desarrollo (CAGR aproximado) ----
-    growth_dict = {}
-    price_trend = (
-        df.groupby(["desarrollo", "anio_firma"])["precio_m2"]
-        .median()
-        .reset_index()
-    )
-
-    for dev, grp in price_trend.groupby("desarrollo"):
-        grp = grp.dropna(subset=["anio_firma", "precio_m2"]).sort_values("anio_firma")
-        if grp["anio_firma"].nunique() >= 2:
-            first = grp["precio_m2"].iloc[0]
-            last = grp["precio_m2"].iloc[-1]
-            years = grp["anio_firma"].iloc[-1] - grp["anio_firma"].iloc[0]
-            if first > 0 and years > 0:
-                cagr = (last / first) ** (1 / years) - 1
-                growth_dict[dev] = cagr * 100  # en %
-
-    # Crecimiento promedio para fallback
-    default_growth = float(np.median(list(growth_dict.values()))) if growth_dict else 5.0
-
-    # Año "hoy" de referencia = último año con datos
-    latest_year = int(df["anio_firma"].max())
-
-    return df, growth_dict, default_growth, latest_year
+    return df, growth_colonia, default_growth, latest_year
 
 
 @st.cache_resource
 def train_model(df: pd.DataFrame):
     """
-    Entrena un RandomForest sobre el histórico limpio.
+    Entrena un RandomForestRegressor usando como variable categórica la colonia.
+    El modelo predice precio_cerrado (precio real de venta).
     """
     numeric_features = [
         "m2_interiores",
@@ -224,7 +97,7 @@ def train_model(df: pd.DataFrame):
         "mes_firma",
         "dias_creacion_a_firma",
     ]
-    cat_features = ["desarrollo"]
+    cat_features = ["colonia"]
 
     X_num = df[numeric_features].fillna(0)
     X_cat = pd.get_dummies(df[cat_features].astype(str), prefix=cat_features)
@@ -238,13 +111,11 @@ def train_model(df: pd.DataFrame):
         n_jobs=-1,
     )
     model.fit(X, y)
-
-    feature_columns = X.columns.tolist()
-    return model, feature_columns
+    return model, X.columns.tolist()
 
 
 def build_input_row(
-    desarrollo,
+    colonia,
     m2_int,
     m2_tot,
     m2_jard,
@@ -253,13 +124,10 @@ def build_input_row(
     descuento_pct,
     anio_ref,
     mes_ref,
-    dias_crea_firma_estimado,
+    dias_medios,
     feature_columns,
 ):
-    """
-    Construye la fila de input con el mismo esquema que el training.
-    anio_ref / mes_ref se fijan al año más reciente de la base (mercado actual).
-    """
+    """Construye una sola fila de input con el mismo esquema que el training."""
     numeric_features = {
         "m2_interiores": m2_int,
         "m2_totales": m2_tot,
@@ -269,23 +137,24 @@ def build_input_row(
         "descuento_pct": descuento_pct,
         "anio_firma": anio_ref,
         "mes_firma": mes_ref,
-        "dias_creacion_a_firma": dias_crea_firma_estimado,
+        "dias_creacion_a_firma": dias_medios,
     }
 
     row = pd.DataFrame([numeric_features])
 
     dummy = pd.get_dummies(
-        pd.Series([desarrollo], name="desarrollo").astype(str),
-        prefix=["desarrollo"]
+        pd.Series([colonia], name="colonia").astype(str),
+        prefix=["colonia"]
     )
 
     for col in feature_columns:
-        if col.startswith("desarrollo_"):
+        if col.startswith("colonia_"):
             if col in dummy.columns:
                 row[col] = dummy[col].iloc[0]
             else:
                 row[col] = 0
 
+    # Asegurar todas las columnas
     for col in feature_columns:
         if col not in row.columns:
             row[col] = 0
@@ -293,8 +162,9 @@ def build_input_row(
     row = row[feature_columns]
     return row
 
+
 # =========================
-# 2. APP STREAMLIT – ENFOCADA A PRECIOS FUTUROS
+# 2. APP STREAMLIT – PRECIOS ACTUALES Y FUTUROS
 # =========================
 
 def main():
@@ -303,77 +173,72 @@ def main():
         layout="wide"
     )
 
-    # Logo opcional
-    try:
-        logo = Image.open("logo.png")
-        st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image(logo, width=220)
-        st.markdown("</div>", unsafe_allow_html=True)
-    except Exception:
-        pass
-
     st.title("🏙️ AI Pricing Engine – Querétaro")
     st.caption(
         "Motor de pricing entrenado con ventas reales desde 2013 "
         "para estimar precios actuales y futuros por zona/producto."
     )
 
-    df, growth_dict, default_growth, latest_year = load_and_prepare_data()
+    df, growth_colonia, default_growth, latest_year = load_and_prepare_data()
     model, feature_columns = train_model(df)
 
     # ================= SIDEBAR =================
     st.sidebar.header("🎯 Producto objetivo (nuevo proyecto)")
 
-    desarrollo = st.sidebar.selectbox(
-        "Zona / desarrollo de referencia",
-        sorted(df["desarrollo"].unique())
+    colonia = st.sidebar.selectbox(
+        "Colonia / zona de referencia",
+        sorted(df["colonia"].unique())
     )
 
-    c1, c2 = st.sidebar.columns(2)
-    with c1:
-        m2_int = st.number_input(
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        m2_int = st.sidebar.number_input(
             "m² interiores",
             min_value=40.0, max_value=600.0,
             value=120.0, step=5.0
         )
-        m2_jard = st.number_input(
+        m2_jard = st.sidebar.number_input(
             "m² jardín",
             min_value=0.0, max_value=300.0,
             value=0.0, step=5.0
         )
-        estac = st.number_input(
+        estac = st.sidebar.number_input(
             "Cajones de estacionamiento",
             min_value=0, max_value=6,
             value=2, step=1
         )
-    with c2:
-        m2_tot = st.number_input(
+    with col2:
+        m2_tot = st.sidebar.number_input(
             "m² totales (incluye terrazas/jardín)",
             min_value=40.0, max_value=800.0,
             value=130.0, step=5.0
         )
-        m2_terr = st.number_input(
+        m2_terr = st.sidebar.number_input(
             "m² terraza",
             min_value=0.0, max_value=200.0,
             value=8.0, step=2.0
         )
-        descuento_pct = st.number_input(
+        descuento_pct = st.sidebar.number_input(
             "Descuento objetivo (%)",
             min_value=0.0, max_value=20.0,
             value=5.0, step=0.5
         )
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📈 Proyección de precios")
+    st.sidebar.subheader("📈 Proyección de precios (Opción C)")
 
-    base_growth = growth_dict.get(desarrollo, default_growth)
-    supuesto_crec_anual = st.sidebar.slider(
-        "Supuesto de crecimiento anual de precios (%)",
-        0.0, 15.0,
-        float(round(base_growth, 1)) if not np.isnan(base_growth) else 5.0,
-        step=0.5,
-        help="Puedes usar la sugerencia automática del modelo o ajustarla "
-             "considerando inflación + apreciación esperada."
+    # Crecimiento histórico por colonia (si existe)
+    hist_growth = growth_colonia.get(colonia, default_growth)
+
+    inflacion = st.sidebar.slider(
+        "Inflación esperada anual (%)",
+        0.0, 12.0, 4.0, step=0.5
+    )
+
+    peso_hist = st.sidebar.slider(
+        "Peso del histórico de la colonia (%)",
+        0, 100, 70, step=5,
+        help="Ejemplo: 70% histórico de la colonia, 30% inflación general."
     )
 
     horizonte_meses = st.sidebar.slider(
@@ -384,24 +249,20 @@ def main():
     st.sidebar.markdown("---")
     precio_objetivo = st.sidebar.number_input(
         "Tu precio de lista (MXN)",
-        min_value=500000.0,
-        max_value=40000000.0,
-        value=3500000.0,
-        step=50000.0
+        min_value=500_000.0,
+        max_value=40_000_000.0,
+        value=3_500_000.0,
+        step=50_000.0
     )
 
     # ================= PREDICCIÓN =================
 
-    # Referencia de calendario: mercado actual ~ último año de la base
     anio_ref = latest_year
-    # Tomamos el mes más frecuente como referencia (estacionalidad media)
     mes_ref = int(df["mes_firma"].dropna().mode().iloc[0])
-
-    # Usamos la mediana de días entre creación y firma como proxy
     dias_medios = int(df["dias_creacion_a_firma"].dropna().median())
 
     input_row = build_input_row(
-        desarrollo=desarrollo,
+        colonia=colonia,
         m2_int=m2_int,
         m2_tot=m2_tot,
         m2_jard=m2_jard,
@@ -410,7 +271,7 @@ def main():
         descuento_pct=descuento_pct,
         anio_ref=anio_ref,
         mes_ref=mes_ref,
-        dias_crea_firma_estimado=dias_medios,
+        dias_medios=dias_medios,
         feature_columns=feature_columns,
     )
 
@@ -419,8 +280,11 @@ def main():
     precio_hoy_max = precio_hoy * 1.05
     precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
 
-    # Proyección futura
-    factor = (1 + supuesto_crec_anual / 100) ** (horizonte_meses / 12.0)
+    # Opción C: combinación histórico + inflación
+    peso_hist_f = peso_hist / 100.0
+    g_efectivo = hist_growth * peso_hist_f + inflacion * (1 - peso_hist_f)
+
+    factor = (1 + g_efectivo / 100.0) ** (horizonte_meses / 12.0)
     precio_futuro = precio_hoy * factor
     precio_futuro_min = precio_hoy_min * factor
     precio_futuro_max = precio_hoy_max * factor
@@ -432,7 +296,7 @@ def main():
     # ================= LAYOUT: TABS =================
 
     tab_resumen, tab_detalle, tab_hist = st.tabs(
-        ["📊 Resumen ejecutivo", "📉 Detalle del escenario", "📈 Historial por zona"]
+        ["📊 Resumen ejecutivo", "📉 Detalle del escenario", "📈 Historial por colonia"]
     )
 
     # ---- TAB 1: RESUMEN ----
@@ -449,7 +313,7 @@ def main():
                 f"${precio_futuro:,.0f} MXN"
             )
             st.metric(
-                f"Precio máx. en {horizonte_meses} meses",
+                f"Precio máximo en {horizonte_meses} meses",
                 f"${precio_futuro_max:,.0f} MXN"
             )
         with c3:
@@ -469,7 +333,7 @@ def main():
         elif delta_pct_hoy > 3:
             st.warning(
                 "Tu precio objetivo está por encima del precio recomendado HOY. "
-                "Podría implicar mayor tiempo en mercado o necesidad de descuento."
+                "Puede implicar mayor tiempo en mercado o necesidad de descuento."
             )
         else:
             st.info(
@@ -480,8 +344,9 @@ def main():
         st.markdown(
             f"""
             - El modelo está entrenado con **{len(df):,} operaciones reales**.  
-            - La tasa de crecimiento sugerida para **{desarrollo}** es de alrededor de
-              **{supuesto_crec_anual:.1f}% anual**, basada en la trayectoria histórica de precio/m².
+            - Crecimiento histórico estimado para **{colonia}**: **{hist_growth:.1f}% anual**.  
+            - Inflación esperada: **{inflacion:.1f}% anual**.  
+            - Tasa efectiva usada (combinación Opción C): **{g_efectivo:.1f}% anual**.
             """
         )
 
@@ -493,7 +358,7 @@ def main():
 
         with col_izq:
             st.markdown("#### Configuración física del producto")
-            st.write(f"- Zona / desarrollo de referencia: **{desarrollo}**")
+            st.write(f"- Colonia / zona de referencia: **{colonia}**")
             st.write(f"- m² interiores: **{m2_int:.1f} m²**")
             st.write(f"- m² totales: **{m2_tot:.1f} m²**")
             st.write(f"- m² terraza: **{m2_terr:.1f} m²**")
@@ -504,7 +369,10 @@ def main():
             st.markdown("#### Supuestos comerciales y de mercado")
             st.write(f"- Descuento objetivo vs lista: **{descuento_pct:.1f}%**")
             st.write(f"- Horizonte de proyección: **{horizonte_meses} meses**")
-            st.write(f"- Crecimiento anual supuesto: **{supuesto_crec_anual:.1f}%**")
+            st.write(f"- Crecimiento histórico colonia: **{hist_growth:.1f}% anual**")
+            st.write(f"- Inflación esperada: **{inflacion:.1f}% anual**")
+            st.write(f"- Peso histórico colonia: **{peso_hist}%**")
+            st.write(f"- Tasa efectiva usada: **{g_efectivo:.1f}% anual**")
             st.write(f"- Precio recomendado HOY: **${precio_hoy:,.0f} MXN**")
             st.write(
                 f"- Precio recomendado en {horizonte_meses} meses: "
@@ -518,17 +386,17 @@ def main():
 
     # ---- TAB 3: HISTÓRICO ----
     with tab_hist:
-        st.subheader("📈 Historial de precios por m² en la zona")
+        st.subheader("📈 Historial de precios por m² en la colonia")
 
-        df_dev = df[df["desarrollo"] == desarrollo].copy()
-        if not df_dev.empty:
+        df_col = df[df["colonia"] == colonia].copy()
+        if not df_col.empty:
             st.write(
-                f"Historial de ventas para **{desarrollo}** "
-                f"({len(df_dev)} operaciones depuradas)."
+                f"Historial de ventas para **{colonia}** "
+                f"({len(df_col)} operaciones depuradas)."
             )
 
             st.dataframe(
-                df_dev[
+                df_col[
                     ["anio_firma", "mes_firma",
                      "m2_interiores", "precio_cerrado", "precio_m2"]
                 ].sort_values(["anio_firma", "mes_firma"])
@@ -536,14 +404,14 @@ def main():
 
             st.markdown("#### Evolución histórica de precio/m² (mediana anual)")
             pivot = (
-                df_dev.groupby("anio_firma")["precio_m2"]
+                df_col.groupby("anio_firma")["precio_m2"]
                 .median()
                 .reset_index()
                 .set_index("anio_firma")
             )
             st.line_chart(pivot)
         else:
-            st.info("No hay historial suficiente para esta zona en la base.")
+            st.info("No hay historial suficiente para esta colonia en la base.")
 
 
 if __name__ == "__main__":
