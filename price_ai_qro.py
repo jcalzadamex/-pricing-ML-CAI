@@ -358,7 +358,7 @@ def main():
     # 🔧 Ajuste de tamaño: capear cuánto puede caer el m² por más metros
     # Referencia: 120 m². Entre 120 y 240 m² el descuento máximo por tamaño es 10%.
     ref_m2 = 120.0
-    max_extra_m2 = 240.0          # de 120 a 240 m²
+    max_extra_m2 = 120.0          # de 120 a 240 m²
     max_size_discount = 0.10      # 10% máximo de rebaja por tamaño
 
     if m2_int > ref_m2:
