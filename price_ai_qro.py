@@ -345,28 +345,58 @@ def main():
         feature_columns=feature_columns,
     )
 
-        # Predicción base del modelo (precio real actual)
+      # Predicción base del modelo (precio real actual)
     precio_base_real = float(model.predict(input_row)[0])
 
     # Ajuste por nivel de precio/m² de la colonia vs el promedio global
     med_colonia = med_price_m2_colonia.get(colonia, med_price_m2_global)
     factor_zona = med_colonia / med_price_m2_global if med_price_m2_global > 0 else 1.0
 
-    # Precio recomendado HOY antes de ajustar por tamaño
+    # Precio recomendado HOY antes de controles de metraje
     precio_hoy_raw = precio_base_real * factor_zona
+    precio_m2_raw = precio_hoy_raw / m2_int if m2_int > 0 else 0
 
-    # 🔧 Ajuste de tamaño: capear cuánto puede caer el m² por más metros
-    # Referencia: 120 m². Entre 120 y 240 m² el descuento máximo por tamaño es 10%.
-    ref_m2 = 120.0
-    max_extra_m2 = 120.0          # de 120 a 240 m²
-    max_size_discount = 0.10      # 10% máximo de rebaja por tamaño
+    # 🔧 DEFINIMOS UNA REFERENCIA DE METRAJE PARA CONTROLAR LA VARIACIÓN (por ejemplo 200 m²)
+    pivot_m2 = 200.0
 
-    if m2_int > ref_m2:
-        exceso = min(m2_int - ref_m2, max_extra_m2)
-        size_discount = (exceso / max_extra_m2) * max_size_discount
-        size_factor = 1.0 - size_discount
+    # Construimos una fila "pivot" con el mismo producto pero m2_interiores = pivot_m2
+    m2_tot_pivot = pivot_m2 + (m2_jard + m2_terr)
+
+    input_row_pivot = build_input_row(
+        colonia=colonia,
+        m2_int=pivot_m2,
+        m2_tot=m2_tot_pivot,
+        m2_jard=m2_jard,
+        m2_terr=m2_terr,
+        estac=estac,
+        descuento_pct=descuento_pct,
+        anio_ref=anio_ref,
+        mes_ref=mes_ref,
+        dias_medios=dias_medios,
+        feature_columns=feature_columns,
+    )
+
+    precio_base_pivot = float(model.predict(input_row_pivot)[0])
+    precio_pivot_raw = precio_base_pivot * factor_zona
+    precio_m2_pivot = precio_pivot_raw / pivot_m2 if pivot_m2 > 0 else 0
+
+    # 🔒 REGLA DE NEGOCIO: EL PRECIO/M² NO PUEDE ALEJARSE MÁS DEL 10% DE LA REFERENCIA
+    max_var = 0.10  # 10%
+
+    if precio_m2_pivot > 0:
+        m2_min = precio_m2_pivot * (1 - max_var)
+        m2_max = precio_m2_pivot * (1 + max_var)
+        precio_m2_ajustado = min(max(precio_m2_raw, m2_min), m2_max)
     else:
-        size_factor = 1.0
+        precio_m2_ajustado = precio_m2_raw
+
+    # Precio HOY usando el m² ya acotado
+    precio_hoy = precio_m2_ajustado * m2_int
+
+    precio_hoy_min = precio_hoy * 0.95
+    precio_hoy_max = precio_hoy * 1.05
+    precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
+
 
     # Precio HOY ya ajustado por colonia + tamaño
     precio_hoy = precio_hoy_raw * size_factor
