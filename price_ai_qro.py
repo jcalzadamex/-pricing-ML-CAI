@@ -230,7 +230,7 @@ def main():
         layout="wide"
     )
 
-    st.title("🏙️ Modelo Determinación de Precios Grupo Caisa – Querétaro")
+    st.title("🏙️ Modelo Determinación de Precios Grupo Caisa – Querétaro ©")
     st.caption(
         "Motor de pricing entrenado con ventas reales desde 2013, "
         "ajustadas por INPC, para estimar precios actuales y futuros por zona/producto."
