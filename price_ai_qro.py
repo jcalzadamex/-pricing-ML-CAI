@@ -352,10 +352,7 @@ def main():
     med_colonia = med_price_m2_colonia.get(colonia, med_price_m2_global)
     factor_zona = med_colonia / med_price_m2_global if med_price_m2_global > 0 else 1.0
 
-    # Precio recomendado HOY antes de controles de metraje
-    precio_hoy_raw = precio_base_real * factor_zona
-    precio_m2_raw = precio_hoy_raw / m2_int if m2_int > 0 else 0
-
+   
     # 🔧 DEFINIMOS UNA REFERENCIA DE METRAJE PARA CONTROLAR LA VARIACIÓN (por ejemplo 200 m²)
     pivot_m2 = 200.0
 
