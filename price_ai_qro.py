@@ -372,7 +372,7 @@ def main():
 
     # ================= LAYOUT: TABS =================
 
-        tab_resumen, tab_detalle, tab_hist = st.tabs(
+    tab_resumen, tab_detalle, tab_hist = st.tabs(
         ["📊 Resumen ejecutivo", "📉 Detalle del escenario", "📈 Historial por colonia"]
     )
 
@@ -381,9 +381,11 @@ def main():
         st.subheader("📊 Recomendación de precio – actual y futuro")
 
         c1, c2, c3 = st.columns(3)
+
         with c1:
             st.metric("Precio recomendado HOY", f"${precio_hoy:,.0f} MXN")
             st.metric("Precio mínimo HOY", f"${precio_hoy_min:,.0f} MXN")
+
         with c2:
             st.metric(
                 f"Precio recomendado en {horizonte_meses} meses",
@@ -393,6 +395,7 @@ def main():
                 f"Precio máximo en {horizonte_meses} meses",
                 f"${precio_futuro_max:,.0f} MXN"
             )
+
         with c3:
             st.metric("Precio HOY por m²", f"${precio_m2_hoy:,.0f} MXN/m²")
             st.metric(
@@ -400,24 +403,24 @@ def main():
                 f"${precio_m2_fut:,.0f} MXN/m²"
             )
 
-        # 👇 Aquí mostramos también el precio de lista que ajustas en el sidebar
+        # 👇 Mostrar precio objetivo
         st.markdown(
-            f"**Tu precio de lista actual:** "
-            f"${precio_objetivo:,.0f} MXN"
+            f"**Tu precio de lista actual:** ${precio_objetivo:,.0f} MXN"
         )
 
-        # 🆕 Monto neto del descuento objetivo en pesos MXN
+        # 🆕 Nuevo: cálculo del descuento en MXN
         descuento_mxn = precio_hoy - precio_hoy_min
+
         st.markdown(
             f"🔻 **Descuento objetivo aplicado:** ${descuento_mxn:,.0f} MXN"
         )
 
         st.markdown("---")
 
+        # Mensajes según desviación
         if abs(delta_pct_hoy) < 3:
             st.success(
-                "Tu precio objetivo está muy alineado con el precio recomendado HOY "
-                "por el modelo."
+                "Tu precio objetivo está muy alineado con el precio recomendado HOY por el modelo."
             )
         elif delta_pct_hoy > 3:
             st.warning(
@@ -432,14 +435,14 @@ def main():
 
         st.markdown(
             f"""
-            - El modelo está entrenado con **{len(df):,} operaciones reales**, 
-              todas ajustadas a precios constantes usando INPC oficial.  
-            - Multiplicador de zona para **{colonia}** (precio/m² colonia / global): **{factor_zona:,.2f}x**.  
-            - Crecimiento histórico estimado (real) para **{colonia}**: **{hist_growth:.1f}% anual**.  
+            - El modelo está entrenado con **{len(df):,} operaciones reales**, todas ajustadas por INPC.  
+            - Multiplicador de zona para **{colonia}**: **{factor_zona:,.2f}x**.  
+            - Crecimiento histórico real en **{colonia}**: **{hist_growth:.1f}% anual**.  
             - Inflación futura esperada: **{inflacion:.1f}% anual**.  
-            - Tasa efectiva usada (histórico + inflación futura): **{g_efectivo:.1f}% anual**.
+            - Tasa efectiva usada (histórico + inflación): **{g_efectivo:.1f}% anual**.
             """
         )
+
 
 
     # ---- TAB 2: DETALLE ----
