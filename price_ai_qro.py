@@ -464,7 +464,7 @@ def main():
                 f"**${delta_abs_hoy:,.0f} MXN ({delta_pct_hoy:,.2f}%)**"
             )
 
-      # ---- TAB 3: HISTÓRICO ----
+         # ---- TAB 3: HISTÓRICO ----
     with tab_hist:
         st.subheader("📈 Historial de precios por m² en la colonia (precios reales)")
 
@@ -491,20 +491,39 @@ def main():
 
             st.dataframe(df_hist)
 
-            # -------- GRÁFICA --------
+            # -------- GRÁFICA CON MATPLOTLIB Y ESCALA CONTROLADA --------
             st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
+
             pivot = (
                 df_col.groupby("anio_firma")["precio_m2"]
                 .median()
                 .reset_index()
-                .set_index("anio_firma")
             )
-            st.line_chart(pivot)
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+
+            ax.plot(
+                pivot["anio_firma"],
+                pivot["precio_m2"],
+                marker="o",
+                linewidth=2,
+            )
+
+            ax.set_title(f"Historial de precios por m² – {colonia}", fontsize=14)
+            ax.set_xlabel("Año", fontsize=12)
+            ax.set_ylabel("Precio por m²", fontsize=12)
+
+            # 👉 Escala automática con margen (aquí puedes tocar el 0.9 y 1.1 si quieres)
+            ymin = pivot["precio_m2"].min() * 0.9
+            ymax = pivot["precio_m2"].max() * 1.1
+            ax.set_ylim(ymin, ymax)
+
+            ax.grid(True, linestyle="--", alpha=0.4)
+
+            st.pyplot(fig)
 
         else:
             st.info("No hay historial suficiente para esta colonia en la base.")
-
-
 
 if __name__ == "__main__":
     main()
