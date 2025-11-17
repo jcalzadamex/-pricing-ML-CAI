@@ -475,13 +475,24 @@ def main():
                 f"({len(df_col)} operaciones depuradas, ajustadas por INPC)."
             )
 
-            st.dataframe(
-                df_col[
-                    ["anio_firma", "mes_firma",
-                     "m2_interiores", "precio_cerrado_real", "precio_m2"]
-                ].sort_values(["anio_firma", "mes_firma"])
-            )
+          # Preparamos la tabla con formato
+df_hist = df_col[
+    ["anio_firma", "mes_firma", "m2_interiores",
+     "precio_cerrado_real", "precio_m2"]
+].sort_values(["anio_firma", "mes_firma"]).copy()
 
+# Formatos de moneda MXN
+df_hist["precio_cerrado_real"] = df_hist["precio_cerrado_real"].apply(
+    lambda x: f"${x:,.2f}"
+)
+df_hist["precio_m2"] = df_hist["precio_m2"].apply(
+    lambda x: f"${x:,.2f}"
+)
+
+st.dataframe(df_hist)
+
+            
+         
             st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
 
             pivot = (
