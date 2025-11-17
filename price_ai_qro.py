@@ -345,17 +345,36 @@ def main():
         feature_columns=feature_columns,
     )
 
-    # Predicción base del modelo (precio real actual)
+        # Predicción base del modelo (precio real actual)
     precio_base_real = float(model.predict(input_row)[0])
 
     # Ajuste por nivel de precio/m² de la colonia vs el promedio global
     med_colonia = med_price_m2_colonia.get(colonia, med_price_m2_global)
     factor_zona = med_colonia / med_price_m2_global if med_price_m2_global > 0 else 1.0
 
-    precio_hoy = precio_base_real * factor_zona
+    # Precio recomendado HOY antes de ajustar por tamaño
+    precio_hoy_raw = precio_base_real * factor_zona
+
+    # 🔧 Ajuste de tamaño: capear cuánto puede caer el m² por más metros
+    # Referencia: 120 m². Entre 120 y 240 m² el descuento máximo por tamaño es 10%.
+    ref_m2 = 120.0
+    max_extra_m2 = 120.0          # de 120 a 240 m²
+    max_size_discount = 0.10      # 10% máximo de rebaja por tamaño
+
+    if m2_int > ref_m2:
+        exceso = min(m2_int - ref_m2, max_extra_m2)
+        size_discount = (exceso / max_extra_m2) * max_size_discount
+        size_factor = 1.0 - size_discount
+    else:
+        size_factor = 1.0
+
+    # Precio HOY ya ajustado por colonia + tamaño
+    precio_hoy = precio_hoy_raw * size_factor
+
     precio_hoy_min = precio_hoy * 0.95
     precio_hoy_max = precio_hoy * 1.05
     precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
+
 
     # Mezcla: histórico colonia (ya real) + inflación futura
     peso_hist_f = peso_hist / 100.0
