@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 import numpy as np
+import matplotlib.pyplot as plt
 
 # =========================
 # 1. CARGA + PREPARACIÓN DE DATOS (CON INPC)
@@ -463,60 +464,57 @@ def main():
                 f"**${delta_abs_hoy:,.0f} MXN ({delta_pct_hoy:,.2f}%)**"
             )
 
-  # ---- TAB 3: HISTÓRICO ----
-with tab_hist:
-    st.subheader("📈 Historial de precios por m² en la colonia (precios reales)")
+    # ---- TAB 3: HISTÓRICO ----
+    with tab_hist:
+        st.subheader("📈 Historial de precios por m² en la colonia (precios reales)")
 
-    df_col = df[df["colonia"] == colonia].copy()
-    if not df_col.empty:
-        st.write(
-            f"Historial de ventas para **{colonia}** "
-            f"({len(df_col)} operaciones depuradas, ajustadas por INPC)."
-        )
+        df_col = df[df["colonia"] == colonia].copy()
+        if not df_col.empty:
+            st.write(
+                f"Historial de ventas para **{colonia}** "
+                f"({len(df_col)} operaciones depuradas, ajustadas por INPC)."
+            )
 
-        st.dataframe(
-            df_col[
-                ["anio_firma", "mes_firma",
-                 "m2_interiores", "precio_cerrado_real", "precio_m2"]
-            ].sort_values(["anio_firma", "mes_firma"])
-        )
+            st.dataframe(
+                df_col[
+                    ["anio_firma", "mes_firma",
+                     "m2_interiores", "precio_cerrado_real", "precio_m2"]
+                ].sort_values(["anio_firma", "mes_firma"])
+            )
 
-        st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
+            st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
 
-        pivot = (
-            df_col.groupby("anio_firma")["precio_m2"]
-            .median()
-            .reset_index()
-        )
+            pivot = (
+                df_col.groupby("anio_firma")["precio_m2"]
+                .median()
+                .reset_index()
+            )
 
-        # --- GRÁFICO MANUAL CON CONTROL DE ESCALA ---
-        import matplotlib.pyplot as plt
+            # --- GRÁFICO MANUAL CON CONTROL DE ESCALA ---
+            fig, ax = plt.subplots(figsize=(10, 5))
 
-        fig, ax = plt.subplots(figsize=(10, 5))
+            ax.plot(
+                pivot["anio_firma"],
+                pivot["precio_m2"],
+                marker="o",
+                linewidth=2
+            )
 
-        ax.plot(
-            pivot["anio_firma"],
-            pivot["precio_m2"],
-            marker="o",
-            linewidth=2
-        )
+            ax.set_title(f"Historial de precios por m² – {colonia}", fontsize=14)
+            ax.set_xlabel("Año", fontsize=12)
+            ax.set_ylabel("Precio por m²", fontsize=12)
 
-        ax.set_title(f"Historial de precios por m² – {colonia}", fontsize=14)
-        ax.set_xlabel("Año", fontsize=12)
-        ax.set_ylabel("Precio por m²", fontsize=12)
+            # 👉 Ajuste de escala automática con margen (PUEDES CAMBIARLO)
+            ymin = pivot["precio_m2"].min() * 0.9
+            ymax = pivot["precio_m2"].max() * 1.1
+            ax.set_ylim(ymin, ymax)
 
-        # 👉 Ajuste de escala automática con margen
-        ymin = pivot["precio_m2"].min() * 0.9
-        ymax = pivot["precio_m2"].max() * 1.1
-        ax.set_ylim(ymin, ymax)
+            ax.grid(True, linestyle="--", alpha=0.4)
 
-        ax.grid(True, linestyle="--", alpha=0.4)
+            st.pyplot(fig)
 
-        st.pyplot(fig)
-
-    else:
-        st.info("No hay historial suficiente para esta colonia en la base.")
-
+        else:
+            st.info("No hay historial suficiente para esta colonia en la base.")
 
 
 if __name__ == "__main__":
