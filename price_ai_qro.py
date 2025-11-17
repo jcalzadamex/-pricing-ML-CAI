@@ -402,8 +402,7 @@ def main():
 
 
     # Precio HOY ya ajustado por colonia + tamaño
-    precio_hoy = precio_hoy_raw * size_factor
-
+   
     precio_hoy_min = precio_hoy * 0.95
     precio_hoy_max = precio_hoy * 1.05
     precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
