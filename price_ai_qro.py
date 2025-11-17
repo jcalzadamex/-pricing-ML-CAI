@@ -464,68 +464,46 @@ def main():
                 f"**${delta_abs_hoy:,.0f} MXN ({delta_pct_hoy:,.2f}%)**"
             )
 
-    # ---- TAB 3: HISTÓRICO ----
+      # ---- TAB 3: HISTÓRICO ----
     with tab_hist:
         st.subheader("📈 Historial de precios por m² en la colonia (precios reales)")
 
         df_col = df[df["colonia"] == colonia].copy()
+
         if not df_col.empty:
             st.write(
                 f"Historial de ventas para **{colonia}** "
                 f"({len(df_col)} operaciones depuradas, ajustadas por INPC)."
             )
 
-          # Preparamos la tabla con formato
-df_hist = df_col[
-    ["anio_firma", "mes_firma", "m2_interiores",
-     "precio_cerrado_real", "precio_m2"]
-].sort_values(["anio_firma", "mes_firma"]).copy()
+            # -------- TABLA FORMATEADA COMO MONEDA --------
+            df_hist = df_col[
+                ["anio_firma", "mes_firma", "m2_interiores",
+                 "precio_cerrado_real", "precio_m2"]
+            ].sort_values(["anio_firma", "mes_firma"]).copy()
 
-# Formatos de moneda MXN
-df_hist["precio_cerrado_real"] = df_hist["precio_cerrado_real"].apply(
-    lambda x: f"${x:,.2f}"
-)
-df_hist["precio_m2"] = df_hist["precio_m2"].apply(
-    lambda x: f"${x:,.2f}"
-)
+            df_hist["precio_cerrado_real"] = df_hist["precio_cerrado_real"].apply(
+                lambda x: f"${x:,.2f}"
+            )
+            df_hist["precio_m2"] = df_hist["precio_m2"].apply(
+                lambda x: f"${x:,.2f}"
+            )
 
-st.dataframe(df_hist)
+            st.dataframe(df_hist)
 
-            
-         
+            # -------- GRÁFICA --------
             st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
-
             pivot = (
                 df_col.groupby("anio_firma")["precio_m2"]
                 .median()
                 .reset_index()
+                .set_index("anio_firma")
             )
-
-            # --- GRÁFICO MANUAL CON CONTROL DE ESCALA ---
-            fig, ax = plt.subplots(figsize=(10, 5))
-
-            ax.plot(
-                pivot["anio_firma"],
-                pivot["precio_m2"],
-                marker="o",
-                linewidth=2
-            )
-
-            ax.set_title(f"Historial de precios por m² – {colonia}", fontsize=14)
-            ax.set_xlabel("Año", fontsize=12)
-            ax.set_ylabel("Precio por m²", fontsize=12)
-
-            # 👉 Ajuste de escala automática con margen (PUEDES CAMBIARLO)
-            ymin = pivot["precio_m2"].min() * 0.9
-            ymax = pivot["precio_m2"].max() * 1.1
-            ax.set_ylim(ymin, ymax)
-
-            ax.grid(True, linestyle="--", alpha=0.4)
-
-            st.pyplot(fig)
+            st.line_chart(pivot)
 
         else:
             st.info("No hay historial suficiente para esta colonia en la base.")
+
 
 
 if __name__ == "__main__":
