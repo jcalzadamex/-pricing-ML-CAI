@@ -408,12 +408,7 @@ def main():
             f"**Tu precio de lista actual:** ${precio_objetivo:,.0f} MXN"
         )
 
-        # 🆕 Nuevo: cálculo del descuento en MXN
-        descuento_mxn = precio_hoy - precio_hoy_min
-
-        st.markdown(
-            f"🔻 **Descuento objetivo aplicado:** ${descuento_mxn:,.0f} MXN"
-        )
+      
 
         st.markdown("---")
 
