@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
 import numpy as np
+from sklearn.ensemble import RandomForestRegressor
 import matplotlib.pyplot as plt
 
 # =========================
 # 1. CARGA + PREPARACIÓN DE DATOS (CON INPC)
 # =========================
+
 
 @st.cache_data
 def load_and_prepare_data():
@@ -44,6 +45,21 @@ def load_and_prepare_data():
             df["fecha_firma"] - df["fecha_creacion"]
         ).dt.days
 
+    # Columna de descuento (si no existe, la ponemos en 0)
+    if "descuento_pct" not in df.columns:
+        df["descuento_pct"] = 0.0
+
+    # m2_totales (si no existe, lo calculamos)
+    if "m2_totales" not in df.columns:
+        for needed in ["m2_interiores", "m2_jardin", "m2_terraza"]:
+            if needed not in df.columns:
+                df[needed] = 0.0
+        df["m2_totales"] = (
+            df["m2_interiores"].fillna(0)
+            + df["m2_jardin"].fillna(0)
+            + df["m2_terraza"].fillna(0)
+        )
+
     # Filtrar registros válidos básicos
     mask_valid = (
         df["precio_cerrado"].notna()
@@ -72,7 +88,7 @@ def load_and_prepare_data():
         inpc_df[["anio", "mes", "inpc"]],
         left_on=["anio_firma", "mes_firma"],
         right_on=["anio", "mes"],
-        how="left"
+        how="left",
     )
 
     # Eliminar registros sin INPC (por seguridad)
@@ -95,9 +111,7 @@ def load_and_prepare_data():
     # --- 4) Niveles de precio/m² por colonia ---
     med_price_m2_global = df["precio_m2"].median()
     med_price_m2_colonia = (
-        df.groupby("colonia")["precio_m2"]
-        .median()
-        .to_dict()
+        df.groupby("colonia")["precio_m2"].median().to_dict()
     )
 
     # --- 5) Crecimiento histórico por colonia (CAGR en % anual) ---
@@ -118,10 +132,7 @@ def load_and_prepare_data():
                 cagr = (last / first) ** (1 / years) - 1
                 growth_colonia[col_name] = cagr * 100.0  # en %
 
-    default_growth = float(
-        np.median(list(growth_colonia.values()))
-    ) if growth_colonia else 5.0
-
+    default_growth = float(np.median(list(growth_colonia.values()))) if growth_colonia else 5.0
     latest_year = int(df["anio_firma"].max())
 
     return (
@@ -133,9 +144,11 @@ def load_and_prepare_data():
         med_price_m2_global,
     )
 
+
 # =========================
 # 2. MODELO
 # =========================
+
 
 @st.cache_resource
 def train_model(df: pd.DataFrame):
@@ -155,6 +168,11 @@ def train_model(df: pd.DataFrame):
         "dias_creacion_a_firma",
     ]
     cat_features = ["colonia"]
+
+    # Garantizar columnas numéricas presentes
+    for col in numeric_features:
+        if col not in df.columns:
+            df[col] = 0
 
     X_num = df[numeric_features].fillna(0)
     X_cat = pd.get_dummies(df[cat_features].astype(str), prefix=cat_features)
@@ -201,7 +219,7 @@ def build_input_row(
 
     dummy = pd.get_dummies(
         pd.Series([colonia], name="colonia").astype(str),
-        prefix=["colonia"]
+        prefix=["colonia"],
     )
 
     for col in feature_columns:
@@ -221,19 +239,92 @@ def build_input_row(
 
 
 # =========================
-# 3. APP STREAMLIT – PRECIOS ACTUALES Y FUTUROS
+# 3. UTILIDAD: HISTORIAL POR COLONIA
 # =========================
+
+
+def mostrar_historial_colonia(colonia, df):
+    st.subheader("📈 Historial de precios por m² en la colonia (precios reales)")
+
+    df_col = df[df["colonia"] == colonia].copy()
+
+    if not df_col.empty:
+        st.write(
+            f"Historial de ventas para **{colonia}** "
+            f"({len(df_col)} operaciones depuradas, ajustadas por INPC)."
+        )
+
+        # -------- TABLA FORMATEADA COMO MONEDA --------
+        df_hist = (
+            df_col[
+                [
+                    "anio_firma",
+                    "mes_firma",
+                    "m2_interiores",
+                    "precio_cerrado_real",
+                    "precio_m2",
+                ]
+            ]
+            .sort_values(["anio_firma", "mes_firma"])
+            .copy()
+        )
+
+        df_hist["precio_cerrado_real"] = df_hist["precio_cerrado_real"].apply(
+            lambda x: f"${x:,.2f}"
+        )
+        df_hist["precio_m2"] = df_hist["precio_m2"].apply(lambda x: f"${x:,.2f}")
+
+        st.dataframe(df_hist)
+
+        # -------- GRÁFICA CON MATPLOTLIB Y ESCALA CONTROLADA --------
+        st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
+
+        pivot = (
+            df_col.groupby("anio_firma")["precio_m2"]
+            .median()
+            .reset_index()
+        )
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+        ax.plot(
+            pivot["anio_firma"],
+            pivot["precio_m2"],
+            marker="o",
+            linewidth=2,
+        )
+
+        ax.set_title(f"Historial de precios por m² – {colonia}", fontsize=14)
+        ax.set_xlabel("Año", fontsize=12)
+        ax.set_ylabel("Precio por m²", fontsize=12)
+
+        ymin = pivot["precio_m2"].min() * 0.9
+        ymax = pivot["precio_m2"].max() * 1.1
+        ax.set_ylim(ymin, ymax)
+
+        ax.grid(True, linestyle="--", alpha=0.4)
+
+        st.pyplot(fig)
+
+    else:
+        st.info("No hay historial suficiente para esta colonia en la base.")
+
+
+# =========================
+# 4. APP STREAMLIT – PRECIOS ACTUALES, FUTUROS Y RENTAS
+# =========================
+
 
 def main():
     st.set_page_config(
         page_title="AI Pricing Engine – Querétaro",
-        layout="wide"
+        layout="wide",
     )
 
     st.title("🏙️ Modelo Determinación de Precios Grupo Caisa – Querétaro ©")
     st.caption(
         "Motor de pricing entrenado con ventas reales desde 2013, "
-        "ajustadas por INPC, para estimar precios actuales y futuros por zona/producto."
+        "ajustadas por INPC, para estimar precios actuales, futuros y rentas por zona/producto."
     )
 
     (
@@ -247,12 +338,16 @@ def main():
 
     model, feature_columns = train_model(df)
 
-    # ================= SIDEBAR =================
+    # ========= SWITCH VENTA / RENTA =========
+    st.sidebar.markdown("## 🧭 Modo de análisis")
+    modo = st.sidebar.radio("Elige qué quieres analizar:", ["Precio de venta", "Renta"])
+
+    # ================= SIDEBAR COMÚN =================
     st.sidebar.header("🎯 Producto objetivo (nuevo proyecto)")
 
     colonia = st.sidebar.selectbox(
         "Colonia / zona de referencia",
-        sorted(df["colonia"].dropna().astype(str).unique())
+        sorted(df["colonia"].dropna().astype(str).unique()),
     )
 
     st.sidebar.markdown("### 🧱 Características físicas")
@@ -261,59 +356,71 @@ def main():
     with col1:
         m2_int = st.number_input(
             "m² interiores",
-            min_value=40.0, max_value=600.0,
-            value=120.0, step=5.0
+            min_value=40.0,
+            max_value=600.0,
+            value=120.0,
+            step=5.0,
         )
         m2_jard = st.number_input(
             "m² jardín",
-            min_value=0.0, max_value=300.0,
-            value=0.0, step=5.0
+            min_value=0.0,
+            max_value=300.0,
+            value=0.0,
+            step=5.0,
         )
     with col2:
         m2_terr = st.number_input(
             "m² terraza",
-            min_value=0.0, max_value=200.0,
-            value=8.0, step=2.0
+            min_value=0.0,
+            max_value=200.0,
+            value=8.0,
+            step=2.0,
         )
         estac = st.number_input(
             "Cajones de estacionamiento",
-            min_value=0, max_value=6,
-            value=2, step=1
+            min_value=0,
+            max_value=6,
+            value=2,
+            step=1,
         )
 
-    # m² totales calculados automáticamente
     m2_tot = m2_int + m2_jard + m2_terr
+    st.sidebar.markdown(f"**m² totales (calculado):** `{m2_tot:,.1f} m²`")
 
-    st.sidebar.markdown(
-        f"**m² totales (calculado):** `{m2_tot:,.1f} m²`"
-    )
-
+    # Descuento pensado para venta
     descuento_pct = st.sidebar.number_input(
-        "Descuento objetivo (%)",
-        min_value=0.0, max_value=20.0,
-        value=5.0, step=0.5
+        "Descuento objetivo en venta (%)",
+        min_value=0.0,
+        max_value=20.0,
+        value=5.0,
+        step=0.5,
     )
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("📈 Proyección de precios (histórico + inflación futura)")
 
-    # Crecimiento histórico por colonia (ya en precios reales)
     hist_growth = growth_colonia.get(colonia, default_growth)
-
     inflacion = st.sidebar.slider(
         "Inflación esperada anual futura (%)",
-        0.0, 12.0, 4.0, step=0.5
+        0.0,
+        12.0,
+        4.0,
+        step=0.5,
     )
-
     peso_hist = st.sidebar.slider(
         "Peso del histórico de la colonia (%)",
-        0, 100, 70, step=5,
-        help="Ejemplo: 70% histórico de la colonia, 30% inflación esperada futura."
+        0,
+        100,
+        70,
+        step=5,
+        help="Ejemplo: 70% histórico de la colonia, 30% inflación esperada futura.",
     )
-
     horizonte_meses = st.sidebar.slider(
         "Horizonte de proyección (meses)",
-        0, 36, 12, step=3
+        0,
+        36,
+        12,
+        step=3,
     )
 
     st.sidebar.markdown("---")
@@ -322,11 +429,31 @@ def main():
         min_value=500_000.0,
         max_value=40_000_000.0,
         value=3_500_000.0,
-        step=50_000.0
+        step=50_000.0,
     )
 
-    # ================= PREDICCIÓN =================
+    # ========= CONTROLES ADICIONALES PARA MODO RENTA =========
+    renta_objetivo = None
+    cap_rate = None
+    if modo == "Renta":
+        st.sidebar.subheader("🏘️ Parámetros de renta")
+        renta_objetivo = st.sidebar.number_input(
+            "Renta mensual objetivo (MXN)",
+            min_value=5_000.0,
+            max_value=200_000.0,
+            value=25_000.0,
+            step=1_000.0,
+        )
+        cap_rate = st.sidebar.slider(
+            "Rendimiento anual bruto objetivo (%)",
+            2.0,
+            12.0,
+            6.0,
+            step=0.5,
+            help="Rendimiento anual deseado sobre el valor de la vivienda.",
+        )
 
+    # ================= PREDICCIÓN DE PRECIO (COMÚN A AMBOS MODOS) =================
     anio_ref = latest_year
     mes_ref = int(df["mes_firma"].dropna().mode().iloc[0])
     dias_medios = int(df["dias_creacion_a_firma"].dropna().median())
@@ -345,18 +472,19 @@ def main():
         feature_columns=feature_columns,
     )
 
-      # Predicción base del modelo (precio real actual)
+    # Predicción base del modelo (precio real actual)
     precio_base_real = float(model.predict(input_row)[0])
 
     # Ajuste por nivel de precio/m² de la colonia vs el promedio global
     med_colonia = med_price_m2_colonia.get(colonia, med_price_m2_global)
     factor_zona = med_colonia / med_price_m2_global if med_price_m2_global > 0 else 1.0
 
-   
-    # 🔧 DEFINIMOS UNA REFERENCIA DE METRAJE PARA CONTROLAR LA VARIACIÓN (por ejemplo 200 m²)
-    pivot_m2 = 200.0
+    # Precio recomendado HOY antes de controles de metraje
+    precio_hoy_raw = precio_base_real * factor_zona
+    precio_m2_raw = precio_hoy_raw / m2_int if m2_int > 0 else 0
 
-    # Construimos una fila "pivot" con el mismo producto pero m2_interiores = pivot_m2
+    # Pivot de 200 m² para limitar variación del m²
+    pivot_m2 = 200.0
     m2_tot_pivot = pivot_m2 + (m2_jard + m2_terr)
 
     input_row_pivot = build_input_row(
@@ -377,215 +505,214 @@ def main():
     precio_pivot_raw = precio_base_pivot * factor_zona
     precio_m2_pivot = precio_pivot_raw / pivot_m2 if pivot_m2 > 0 else 0
 
-    # 🔒 REGLA DE NEGOCIO: EL PRECIO/M² NO PUEDE ALEJARSE MÁS DEL 10% DE LA REFERENCIA
-    max_var = 0.10  # 10%
-
+    max_var = 0.10  # ±10 %
     if precio_m2_pivot > 0:
         m2_min = precio_m2_pivot * (1 - max_var)
         m2_max = precio_m2_pivot * (1 + max_var)
-        # Precio recomendado HOY antes de controles de metraje
-        precio_hoy_raw = precio_base_real * factor_zona
-        precio_m2_raw = precio_hoy_raw / m2_int if m2_int > 0 else 0
-
-        
-        
         precio_m2_ajustado = min(max(precio_m2_raw, m2_min), m2_max)
     else:
         precio_m2_ajustado = precio_m2_raw
 
-    # Precio HOY usando el m² ya acotado
     precio_hoy = precio_m2_ajustado * m2_int
-
     precio_hoy_min = precio_hoy * 0.95
     precio_hoy_max = precio_hoy * 1.05
     precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
 
-
-    # Precio HOY ya ajustado por colonia + tamaño
-   
-    precio_hoy_min = precio_hoy * 0.95
-    precio_hoy_max = precio_hoy * 1.05
-    precio_m2_hoy = precio_hoy / m2_int if m2_int > 0 else 0
-
-
-    # Mezcla: histórico colonia (ya real) + inflación futura
+    # Proyección futura
     peso_hist_f = peso_hist / 100.0
     g_efectivo = hist_growth * peso_hist_f + inflacion * (1 - peso_hist_f)
-
     factor_tiempo = (1 + g_efectivo / 100.0) ** (horizonte_meses / 12.0)
+
     precio_futuro = precio_hoy * factor_tiempo
-    precio_futuro_min = precio_hoy_min * factor_tiempo
     precio_futuro_max = precio_hoy_max * factor_tiempo
     precio_m2_fut = precio_futuro / m2_int if m2_int > 0 else 0
 
     delta_abs_hoy = precio_objetivo - precio_hoy
     delta_pct_hoy = (delta_abs_hoy / precio_hoy * 100) if precio_hoy > 0 else 0
 
-    # ================= LAYOUT: TABS =================
+    # ========= MÉTRICAS DE RENTA (solo si modo == Renta) =========
+    renta_recomendada = renta_min = renta_max = delta_pct_renta = rendimiento_obj = None
+    if modo == "Renta" and cap_rate is not None and renta_objetivo is not None:
+        renta_recomendada = precio_hoy * (cap_rate / 100.0) / 12.0
+        renta_min = renta_recomendada * 0.9
+        renta_max = renta_recomendada * 1.1
 
+        if renta_recomendada > 0:
+            delta_pct_renta = (renta_objetivo / renta_recomendada - 1) * 100.0
+        else:
+            delta_pct_renta = 0.0
+
+        rendimiento_obj = (
+            renta_objetivo * 12.0 / precio_hoy * 100.0 if precio_hoy > 0 else 0.0
+        )
+
+    # ================= LAYOUT: TABS =================
     tab_resumen, tab_detalle, tab_hist = st.tabs(
         ["📊 Resumen ejecutivo", "📉 Detalle del escenario", "📈 Historial por colonia"]
     )
 
-    # ---- TAB 1: RESUMEN ----
-    with tab_resumen:
-        st.subheader("📊 Recomendación de precio – actual y futuro")
+    # --------- MODO VENTA ---------
+    if modo == "Precio de venta":
+        with tab_resumen:
+            st.subheader("📊 Recomendación de precio – actual y futuro")
 
-        c1, c2, c3 = st.columns(3)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Precio recomendado HOY", f"${precio_hoy:,.0f} MXN")
+                st.metric("Precio mínimo HOY", f"${precio_hoy_min:,.0f} MXN")
+            with c2:
+                st.metric(
+                    f"Precio recomendado en {horizonte_meses} meses",
+                    f"${precio_futuro:,.0f} MXN",
+                )
+                st.metric(
+                    f"Precio máximo en {horizonte_meses} meses",
+                    f"${precio_futuro_max:,.0f} MXN",
+                )
+            with c3:
+                st.metric("Precio HOY por m²", f"${precio_m2_hoy:,.0f} MXN/m²")
+                st.metric("Precio futuro por m²", f"${precio_m2_fut:,.0f} MXN/m²")
 
-        with c1:
-            st.metric("Precio recomendado HOY", f"${precio_hoy:,.0f} MXN")
-            st.metric("Precio mínimo HOY", f"${precio_hoy_min:,.0f} MXN")
+            st.markdown(f"**Tu precio de lista actual:** ${precio_objetivo:,.0f} MXN")
+            st.markdown("---")
 
-        with c2:
-            st.metric(
-                f"Precio recomendado en {horizonte_meses} meses",
-                f"${precio_futuro:,.0f} MXN"
-            )
-            st.metric(
-                f"Precio máximo en {horizonte_meses} meses",
-                f"${precio_futuro_max:,.0f} MXN"
-            )
+            if abs(delta_pct_hoy) < 3:
+                st.success(
+                    "Tu precio objetivo está muy alineado con el precio recomendado HOY por el modelo."
+                )
+            elif delta_pct_hoy > 3:
+                st.warning(
+                    "Tu precio objetivo está por encima del precio recomendado HOY. "
+                    "Puede implicar mayor tiempo en mercado o necesidad de descuento."
+                )
+            else:
+                st.info(
+                    "Tu precio objetivo está por debajo del precio recomendado HOY. "
+                    "Puede favorecer velocidad de venta o indicar oportunidad de capturar más valor."
+                )
 
-        with c3:
-            st.metric("Precio HOY por m²", f"${precio_m2_hoy:,.0f} MXN/m²")
-            st.metric(
-                f"Precio futuro por m²",
-                f"${precio_m2_fut:,.0f} MXN/m²"
-            )
-
-        # 👇 Mostrar precio objetivo
-        st.markdown(
-            f"**Tu precio de lista actual:** ${precio_objetivo:,.0f} MXN"
-        )
-
-      
-
-        st.markdown("---")
-
-        # Mensajes según desviación
-        if abs(delta_pct_hoy) < 3:
-            st.success(
-                "Tu precio objetivo está muy alineado con el precio recomendado HOY por el modelo."
-            )
-        elif delta_pct_hoy > 3:
-            st.warning(
-                "Tu precio objetivo está por encima del precio recomendado HOY. "
-                "Puede implicar mayor tiempo en mercado o necesidad de descuento."
-            )
-        else:
-            st.info(
-                "Tu precio objetivo está por debajo del precio recomendado HOY. "
-                "Puede favorecer velocidad de venta o indicar oportunidad de capturar más valor."
+            st.markdown(
+                f"""
+                - El modelo está entrenado con **{len(df):,} operaciones reales**, todas ajustadas por INPC.  
+                - Multiplicador de zona para **{colonia}**: **{factor_zona:,.2f}x**.  
+                - Crecimiento histórico real en **{colonia}**: **{hist_growth:.1f}% anual**.  
+                - Inflación futura esperada: **{inflacion:.1f}% anual**.  
+                - Tasa efectiva usada (histórico + inflación): **{g_efectivo:.1f}% anual**.
+                """
             )
 
-        st.markdown(
-            f"""
-            - El modelo está entrenado con **{len(df):,} operaciones reales**, todas ajustadas por INPC.  
-            - Multiplicador de zona para **{colonia}**: **{factor_zona:,.2f}x**.  
-            - Crecimiento histórico real en **{colonia}**: **{hist_growth:.1f}% anual**.  
-            - Inflación futura esperada: **{inflacion:.1f}% anual**.  
-            - Tasa efectiva usada (histórico + inflación): **{g_efectivo:.1f}% anual**.
-            """
-        )
+        with tab_detalle:
+            st.subheader("📉 Detalle del producto y supuestos de proyección")
 
+            col_izq, col_der = st.columns(2)
+            with col_izq:
+                st.markdown("#### Configuración física del producto")
+                st.write(f"- Colonia / zona de referencia: **{colonia}**")
+                st.write(f"- m² interiores: **{m2_int:.1f} m²**")
+                st.write(f"- m² totales (calculado): **{m2_tot:.1f} m²**")
+                st.write(f"- m² terraza: **{m2_terr:.1f} m²**")
+                st.write(f"- m² jardín: **{m2_jard:.1f} m²**")
+                st.write(f"- Cajones de estacionamiento: **{estac}**")
 
+            with col_der:
+                st.markdown("#### Supuestos comerciales y de mercado")
+                st.write(f"- Descuento objetivo vs lista: **{descuento_pct:.1f}%**")
+                st.write(f"- Horizonte de proyección: **{horizonte_meses} meses**")
+                st.write(
+                    f"- Crecimiento histórico colonia (real): **{hist_growth:.1f}% anual**"
+                )
+                st.write(f"- Inflación futura esperada: **{inflacion:.1f}% anual**")
+                st.write(f"- Peso histórico colonia: **{peso_hist}%**")
+                st.write(f"- Tasa efectiva usada: **{g_efectivo:.1f}% anual**")
+                st.write(f"- Multiplicador de zona: **{factor_zona:,.2f}x**")
+                st.write(f"- Precio recomendado HOY: **${precio_hoy:,.0f} MXN**")
+                st.write(
+                    f"- Diferencia vs precio IA HOY: "
+                    f"**${delta_abs_hoy:,.0f} MXN ({delta_pct_hoy:,.2f}%)**"
+                )
 
-    # ---- TAB 2: DETALLE ----
-    with tab_detalle:
-        st.subheader("📉 Detalle del producto y supuestos de proyección")
+        with tab_hist:
+            mostrar_historial_colonia(colonia, df)
 
-        col_izq, col_der = st.columns(2)
+    # --------- MODO RENTA ---------
+    else:
+        with tab_resumen:
+            st.subheader("📊 Recomendación de renta mensual")
 
-        with col_izq:
-            st.markdown("#### Configuración física del producto")
-            st.write(f"- Colonia / zona de referencia: **{colonia}**")
-            st.write(f"- m² interiores: **{m2_int:.1f} m²**")
-            st.write(f"- m² totales (calculado): **{m2_tot:.1f} m²**")
-            st.write(f"- m² terraza: **{m2_terr:.1f} m²**")
-            st.write(f"- m² jardín: **{m2_jard:.1f} m²**")
-            st.write(f"- Cajones de estacionamiento: **{estac}**")
+            if renta_recomendada is None:
+                st.info("Configura renta objetivo y rendimiento en la barra lateral.")
+            else:
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric(
+                        "Renta recomendada", f"${renta_recomendada:,.0f} MXN/mes"
+                    )
+                    st.metric("Renta mínima (–10%)", f"${renta_min:,.0f} MXN/mes")
+                with c2:
+                    st.metric("Renta máxima (+10%)", f"${renta_max:,.0f} MXN/mes")
+                    st.metric("Renta objetivo", f"${renta_objetivo:,.0f} MXN/mes")
+                with c3:
+                    st.metric("Rend. bruto objetivo", f"{cap_rate:.1f}% anual")
+                    st.metric(
+                        "Rend. bruto con tu renta", f"{rendimiento_obj:.1f}% anual"
+                    )
 
-        with col_der:
-            st.markdown("#### Supuestos comerciales y de mercado")
-            st.write(f"- Descuento objetivo vs lista: **{descuento_pct:.1f}%**")
-            st.write(f"- Horizonte de proyección: **{horizonte_meses} meses**")
-            st.write(f"- Crecimiento histórico colonia (real): **{hist_growth:.1f}% anual**")
-            st.write(f"- Inflación futura esperada: **{inflacion:.1f}% anual**")
-            st.write(f"- Peso histórico colonia: **{peso_hist}%**")
-            st.write(f"- Tasa efectiva usada: **{g_efectivo:.1f}% anual**")
-            st.write(f"- Multiplicador de zona (precio/m² colonia / global): **{factor_zona:,.2f}x**")
-            st.write(f"- Precio recomendado HOY: **${precio_hoy:,.0f} MXN**")
-            st.write(
-                f"- Precio recomendado en {horizonte_meses} meses: "
-                f"**${precio_futuro:,.0f} MXN**"
-            )
-            st.write(f"- Tu precio de lista objetivo HOY: **${precio_objetivo:,.0f} MXN**")
-            st.write(
-                f"- Diferencia vs precio IA HOY: "
-                f"**${delta_abs_hoy:,.0f} MXN ({delta_pct_hoy:,.2f}%)**"
-            )
+                # Semáforo
+                if abs(delta_pct_renta) <= 5:
+                    st.success(
+                        "🟢 Tu renta objetivo está dentro de ±5% de la renta recomendada. "
+                        "Muy alineada con el rendimiento objetivo."
+                    )
+                elif abs(delta_pct_renta) <= 15:
+                    st.warning(
+                        "🟡 Tu renta objetivo se aleja entre un 5% y 15% de la renta recomendada. "
+                        "Podría ser negociable pero conviene revisarlo."
+                    )
+                else:
+                    if delta_pct_renta > 15:
+                        st.error(
+                            "🔴 Tu renta objetivo está **muy por encima** de la renta recomendada. "
+                            "Riesgo de baja ocupación o dificultad para colocarla."
+                        )
+                    else:
+                        st.error(
+                            "🔴 Tu renta objetivo está **muy por debajo** de la renta recomendada. "
+                            "Podrías estar dejando rendimiento sobre la mesa."
+                        )
 
-         # ---- TAB 3: HISTÓRICO ----
-    with tab_hist:
-        st.subheader("📈 Historial de precios por m² en la colonia (precios reales)")
+                st.markdown(
+                    f"""
+                    - Valor de referencia de la vivienda (modelo venta HOY): **${precio_hoy:,.0f} MXN**  
+                    - Rendimiento bruto objetivo: **{cap_rate:.1f}% anual**  
+                    - Renta recomendada = valor × rendimiento / 12  
+                    - Con tu renta objetivo, el rendimiento estimado es **{rendimiento_obj:.1f}% anual**.
+                    """
+                )
 
-        df_col = df[df["colonia"] == colonia].copy()
+        with tab_detalle:
+            st.subheader("📉 Detalle del escenario de renta")
 
-        if not df_col.empty:
-            st.write(
-                f"Historial de ventas para **{colonia}** "
-                f"({len(df_col)} operaciones depuradas, ajustadas por INPC)."
-            )
+            if renta_recomendada is not None:
+                st.write(f"- Colonia: **{colonia}**")
+                st.write(f"- Valor estimado (IA) HOY: **${precio_hoy:,.0f} MXN**")
+                st.write(f"- m² interiores: **{m2_int:.1f} m²**")
+                st.write(f"- m² totales: **{m2_tot:.1f} m²**")
+                st.write(f"- Renta recomendada: **${renta_recomendada:,.0f} MXN/mes**")
+                st.write(f"- Renta objetivo: **${renta_objetivo:,.0f} MXN/mes**")
+                st.write(f"- Rendimiento objetivo: **{cap_rate:.1f}% anual**")
+                st.write(
+                    f"- Rendimiento con tu renta: **{rendimiento_obj:.1f}% anual**"
+                )
+                st.write(
+                    f"- Diferencia vs renta recomendada: **{delta_pct_renta:,.1f}%**"
+                )
+            else:
+                st.info("Configura primero la renta objetivo en el panel lateral.")
 
-            # -------- TABLA FORMATEADA COMO MONEDA --------
-            df_hist = df_col[
-                ["anio_firma", "mes_firma", "m2_interiores",
-                 "precio_cerrado_real", "precio_m2"]
-            ].sort_values(["anio_firma", "mes_firma"]).copy()
+        with tab_hist:
+            mostrar_historial_colonia(colonia, df)
 
-            df_hist["precio_cerrado_real"] = df_hist["precio_cerrado_real"].apply(
-                lambda x: f"${x:,.2f}"
-            )
-            df_hist["precio_m2"] = df_hist["precio_m2"].apply(
-                lambda x: f"${x:,.2f}"
-            )
-
-            st.dataframe(df_hist)
-
-            # -------- GRÁFICA CON MATPLOTLIB Y ESCALA CONTROLADA --------
-            st.markdown("#### Evolución histórica de precio/m² real (mediana anual)")
-
-            pivot = (
-                df_col.groupby("anio_firma")["precio_m2"]
-                .median()
-                .reset_index()
-            )
-
-            fig, ax = plt.subplots(figsize=(10, 5))
-
-            ax.plot(
-                pivot["anio_firma"],
-                pivot["precio_m2"],
-                marker="o",
-                linewidth=2,
-            )
-
-            ax.set_title(f"Historial de precios por m² – {colonia}", fontsize=14)
-            ax.set_xlabel("Año", fontsize=12)
-            ax.set_ylabel("Precio por m²", fontsize=12)
-
-            # 👉 Escala automática con margen (aquí puedes tocar el 0.9 y 1.1 si quieres)
-            ymin = pivot["precio_m2"].min() * 0.9
-            ymax = pivot["precio_m2"].max() * 1.1
-            ax.set_ylim(ymin, ymax)
-
-            ax.grid(True, linestyle="--", alpha=0.4)
-
-            st.pyplot(fig)
-
-        else:
-            st.info("No hay historial suficiente para esta colonia en la base.")
 
 if __name__ == "__main__":
     main()
+
