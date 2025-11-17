@@ -383,6 +383,12 @@ def main():
     if precio_m2_pivot > 0:
         m2_min = precio_m2_pivot * (1 - max_var)
         m2_max = precio_m2_pivot * (1 + max_var)
+        # Precio recomendado HOY antes de controles de metraje
+        precio_hoy_raw = precio_base_real * factor_zona
+        precio_m2_raw = precio_hoy_raw / m2_int if m2_int > 0 else 0
+
+        
+        
         precio_m2_ajustado = min(max(precio_m2_raw, m2_min), m2_max)
     else:
         precio_m2_ajustado = precio_m2_raw
