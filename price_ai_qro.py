@@ -372,9 +372,10 @@ def main():
 
     # ================= LAYOUT: TABS =================
 
-    tab_resumen, tab_detalle, tab_hist = st.tabs(
+        tab_resumen, tab_detalle, tab_hist = st.tabs(
         ["📊 Resumen ejecutivo", "📉 Detalle del escenario", "📈 Historial por colonia"]
     )
+
     # ---- TAB 1: RESUMEN ----
     with tab_resumen:
         st.subheader("📊 Recomendación de precio – actual y futuro")
@@ -405,9 +406,13 @@ def main():
             f"${precio_objetivo:,.0f} MXN"
         )
 
-        st.markdown("---")
+        # 🆕 Monto neto del descuento objetivo en pesos MXN
+        descuento_mxn = precio_hoy - precio_hoy_min
+        st.markdown(
+            f"🔻 **Descuento objetivo aplicado:** ${descuento_mxn:,.0f} MXN"
+        )
 
-      
+        st.markdown("---")
 
         if abs(delta_pct_hoy) < 3:
             st.success(
@@ -435,6 +440,7 @@ def main():
             - Tasa efectiva usada (histórico + inflación futura): **{g_efectivo:.1f}% anual**.
             """
         )
+
 
     # ---- TAB 2: DETALLE ----
     with tab_detalle:
