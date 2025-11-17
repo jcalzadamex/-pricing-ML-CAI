@@ -407,6 +407,14 @@ def main():
 
         st.markdown("---")
 
+        # --- NUEVO: cálculo del monto del descuento aplicado ---
+descuento_monto = precio_hoy - precio_hoy_min
+
+st.markdown(
+    f"🔻 **Descuento aplicado:** ${descuento_monto:,.0f} MXN"
+)
+
+
 
         if abs(delta_pct_hoy) < 3:
             st.success(
