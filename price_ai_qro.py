@@ -375,7 +375,6 @@ def main():
     tab_resumen, tab_detalle, tab_hist = st.tabs(
         ["📊 Resumen ejecutivo", "📉 Detalle del escenario", "📈 Historial por colonia"]
     )
-
     # ---- TAB 1: RESUMEN ----
     with tab_resumen:
         st.subheader("📊 Recomendación de precio – actual y futuro")
@@ -400,7 +399,14 @@ def main():
                 f"${precio_m2_fut:,.0f} MXN/m²"
             )
 
+        # 👇 Aquí mostramos también el precio de lista que ajustas en el sidebar
+        st.markdown(
+            f"**Tu precio de lista actual (input lateral):** "
+            f"${precio_objetivo:,.0f} MXN"
+        )
+
         st.markdown("---")
+
 
         if abs(delta_pct_hoy) < 3:
             st.success(
