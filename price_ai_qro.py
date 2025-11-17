@@ -401,7 +401,7 @@ def main():
 
         # 👇 Aquí mostramos también el precio de lista que ajustas en el sidebar
         st.markdown(
-            f"**Tu precio de lista actual (input lateral):** "
+            f"**Tu precio de lista actual:** "
             f"${precio_objetivo:,.0f} MXN"
         )
 
